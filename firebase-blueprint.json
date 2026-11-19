@@ -1,0 +1,1137 @@
+{
+  "entities": {
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator privilege record",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Admin user UID"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified administrator email"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "description": "Administrative role"
+        },
+        "grantedAt": {
+          "type": "string",
+          "description": "Server timestamp when admin privilege was granted"
+        }
+      },
+      "required": ["uid", "email", "role", "grantedAt"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Root user role assignment record (no PII)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique user UID"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "teacher", "student"],
+          "description": "Role assignment"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "role", "createdAt", "updatedAt"]
+    },
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Non-PII public profile containing avatar URL from Firebase Storage",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique user UID"
+        },
+        "firstName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "First name"
+        },
+        "lastName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Last name"
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Symbolic avatar fallback gender"
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Firebase Storage profile picture download URL"
+        },
+        "avatarStoragePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Firebase Storage object path for user avatar"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"],
+          "description": "Explicit public profile visibility marker"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "firstName", "lastName", "gender", "visibility", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII document strictly accessible only by owner or administrator",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique user UID"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Institutional or verified Google email address"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "email", "createdAt", "updatedAt"]
+    },
+    "UserPreferences": {
+      "title": "UserPreferences",
+      "description": "Per-user UI preferences synced across devices (preferred light/dark theme)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Preference document ID (ui)"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner user UID"
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["dark", "light"],
+          "description": "Preferred light or dark UI mode"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "userId", "theme", "createdAt", "updatedAt"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Academic course catalog document without sensitive private MP4 storage paths",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique course ID"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Official academic course code"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Course title"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000,
+          "description": "Course description"
+        },
+        "instructorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Instructor ID"
+        },
+        "instructorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Instructor display name"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Open for Enrollment", "Active", "Coming Soon"],
+          "description": "Enrollment status"
+        },
+        "level": {
+          "type": "string",
+          "enum": ["Beginner", "Intermediate", "Advanced"],
+          "description": "Difficulty level"
+        },
+        "thumbnail": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Cover thumbnail URL"
+        },
+        "totalLectures": {
+          "type": "number",
+          "description": "Planned number of lectures"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether the course is visible in catalog"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "code", "title", "description", "instructorId", "instructorName", "status", "level", "thumbnail", "totalLectures", "isPublished", "createdAt", "updatedAt"]
+    },
+    "CourseEnrollment": {
+      "title": "CourseEnrollment",
+      "description": "Per-student course enrollment record used by Master Gate security rules",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Enrolled student Firebase UID"
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent course ID"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "completed", "revoked"],
+          "description": "Active enrollment gate status"
+        },
+        "enrolledAt": {
+          "type": "string",
+          "description": "Enrollment server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": ["userId", "courseId", "status", "enrolledAt", "updatedAt"]
+    },
+    "CourseRecordingCatalog": {
+      "title": "CourseRecordingCatalog",
+      "description": "Public preview index of course lectures without sensitive MP4 stream paths",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Recording ID"
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent course ID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Lecture title"
+        },
+        "duration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Lecture duration string"
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Watermarked thumbnail image URL"
+        },
+        "teaserUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Public video teaser / orientation trailer URL"
+        },
+        "teaserStoragePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Firebase Storage object path for public teaser preview clip"
+        },
+        "supplementaryPdfUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional supplementary PDF worksheet or study notes URL"
+        },
+        "supplementaryPdfName": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional supplementary PDF file name"
+        },
+        "supplementaryPdfStoragePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional Firebase Storage path for supplementary PDF"
+        },
+        "isOrientation": {
+          "type": "boolean",
+          "description": "True if publicly viewable orientation lecture"
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["video/mp4"],
+          "description": "Media format identifier"
+        },
+        "fileSize": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "File size display string"
+        },
+        "recordedAt": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "ISO recording date"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "courseId", "title", "duration", "thumbnailUrl", "isOrientation", "mimeType", "fileSize", "recordedAt", "createdAt", "updatedAt"]
+    },
+    "CourseRecording": {
+      "title": "CourseRecording",
+      "description": "Protected MP4 recording metadata containing Firebase Storage bucket path guarded by enrollment",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Recording ID"
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent course ID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Lecture title"
+        },
+        "duration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Lecture duration string"
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Thumbnail image URL"
+        },
+        "teaserUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Public video teaser / orientation trailer URL"
+        },
+        "teaserStoragePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Firebase Storage object path for public teaser preview clip"
+        },
+        "supplementaryPdfUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional supplementary PDF worksheet or study notes URL"
+        },
+        "supplementaryPdfName": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional supplementary PDF file name"
+        },
+        "supplementaryPdfStoragePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional Firebase Storage path for supplementary PDF"
+        },
+        "storagePath": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Firebase Storage bucket object path for protected MP4 stream"
+        },
+        "videoUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Fallback MP4 stream URL if external"
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["video/mp4"],
+          "description": "Strictly enforced MP4 format"
+        },
+        "nonDownloadable": {
+          "type": "boolean",
+          "description": "System policy marker enforcing non-downloadable streaming"
+        },
+        "nonShareable": {
+          "type": "boolean",
+          "description": "System policy marker blocking sharing"
+        },
+        "isOrientation": {
+          "type": "boolean",
+          "description": "True if publicly viewable orientation lecture"
+        },
+        "uploadedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Uploader UID"
+        },
+        "syncedFromZoomWebhook": {
+          "type": "boolean",
+          "description": "Whether synced via Zoom hook"
+        },
+        "fileSize": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "File size string"
+        },
+        "recordedAt": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Recording timestamp string"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "courseId", "title", "duration", "thumbnailUrl", "storagePath", "videoUrl", "mimeType", "nonDownloadable", "nonShareable", "isOrientation", "uploadedBy", "syncedFromZoomWebhook", "fileSize", "recordedAt", "createdAt", "updatedAt"]
+    },
+    "StreamRequest": {
+      "title": "StreamRequest",
+      "description": "Authenticated and enrollment-verified request to stream an MP4 recording from Firebase Storage",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique stream request ID"
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target course ID"
+        },
+        "recordingId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target recording ID"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated requester UID"
+        },
+        "storagePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Firebase Storage bucket path requested for streaming"
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["video/mp4"],
+          "description": "Requested media format"
+        },
+        "nonDownloadable": {
+          "type": "boolean",
+          "description": "Must be true to enforce non-downloadable streaming mode"
+        },
+        "accessType": {
+          "type": "string",
+          "enum": ["orientation_preview", "enrolled_stream", "admin_stream"],
+          "description": "Authorization path granting stream access"
+        },
+        "requestedAt": {
+          "type": "string",
+          "description": "Server timestamp of the stream request"
+        }
+      },
+      "required": ["id", "courseId", "recordingId", "userId", "storagePath", "mimeType", "nonDownloadable", "accessType", "requestedAt"]
+    },
+    "CommunityPost": {
+      "title": "CommunityPost",
+      "description": "Community feed discussion post",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique post ID"
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Author UID"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Author display name"
+        },
+        "authorRole": {
+          "type": "string",
+          "enum": ["admin", "teacher", "student"],
+          "description": "Author role"
+        },
+        "authorGender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Author gender"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000,
+          "description": "Post body"
+        },
+        "mediaUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional attached media URL"
+        },
+        "authorAvatar": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional author avatar URL"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["announcement", "community"],
+          "description": "Post category"
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Pinned post flag"
+        },
+        "flagged": {
+          "type": "boolean",
+          "description": "Moderation flagged status"
+        },
+        "likes": {
+          "type": "number",
+          "description": "Number of likes"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "authorId", "authorName", "authorRole", "authorGender", "content", "category", "pinned", "flagged", "likes", "createdAt", "updatedAt"]
+    },
+    "CommunityComment": {
+      "title": "CommunityComment",
+      "description": "Reply comment attached to a community post",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique comment ID"
+        },
+        "postId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent post ID"
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Comment author UID"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Author display name"
+        },
+        "authorRole": {
+          "type": "string",
+          "enum": ["admin", "teacher", "student"],
+          "description": "Author role"
+        },
+        "authorGender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Author gender"
+        },
+        "authorAvatar": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional author avatar URL"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Comment text"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "postId", "authorId", "authorName", "authorRole", "authorGender", "content", "createdAt", "updatedAt"]
+    },
+    "CommunityLike": {
+      "title": "CommunityLike",
+      "description": "Per-user atomic like receipt under a community post",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Liking user UID"
+        },
+        "postId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Liked post ID"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Like server timestamp"
+        }
+      },
+      "required": ["userId", "postId", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Real-time channel discussion message",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique chat message ID"
+        },
+        "courseId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional scoped course ID"
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Chat channel slug"
+        },
+        "senderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Sender UID"
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Sender display name"
+        },
+        "senderRole": {
+          "type": "string",
+          "enum": ["admin", "teacher", "student"],
+          "description": "Sender role"
+        },
+        "senderGender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Sender gender"
+        },
+        "senderAvatar": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional sender avatar URL"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Chat message content"
+        },
+        "flagged": {
+          "type": "boolean",
+          "description": "Moderation flagged status"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        }
+      },
+      "required": ["id", "channelId", "senderId", "senderName", "senderRole", "senderGender", "content", "flagged", "createdAt"]
+    },
+    "BlogPost": {
+      "title": "BlogPost",
+      "description": "Published scholastic blog article",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique blog ID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Article headline"
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "description": "Short editorial summary"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50000,
+          "description": "Full editorial body"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Author name"
+        },
+        "authorBadge": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Editorial badge"
+        },
+        "readTime": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Estimated reading time"
+        },
+        "bannerUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Banner image URL"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded list of up to 10 topic tags"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Publication visibility flag"
+        },
+        "publishedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "ISO publication timestamp"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "title", "excerpt", "content", "authorName", "authorBadge", "readTime", "bannerUrl", "tags", "isPublished", "publishedAt", "createdAt", "updatedAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Hero branding and dynamic navbar configuration",
+      "type": "object",
+      "properties": {
+        "heroMode": {
+          "type": "string",
+          "enum": ["video", "image"],
+          "description": "Hero media mode"
+        },
+        "heroVideoUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Promotional hero MP4 URL"
+        },
+        "heroPosterUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Hero video poster image URL"
+        },
+        "heroImageUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Static hero image URL"
+        },
+        "heroHeadline": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Hero headline"
+        },
+        "heroSubheadline": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Hero subheadline"
+        },
+        "customLogoUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Custom logo URL"
+        },
+        "customNavItems": {
+          "type": "array",
+          "description": "Bounded navigation link items"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": ["heroMode", "heroVideoUrl", "heroPosterUrl", "heroImageUrl", "heroHeadline", "heroSubheadline", "customLogoUrl", "updatedAt"]
+    },
+    "AcademyEvent": {
+      "title": "AcademyEvent",
+      "description": "Campus academy event or bulletin item displayed on the pinned poster board",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique event ID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Event headline"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 3000,
+          "description": "Event summary details"
+        },
+        "posterUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Event poster image URL"
+        },
+        "courseId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional linked course ID"
+        },
+        "courseTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional linked course title"
+        },
+        "startUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "UTC start ISO timestamp"
+        },
+        "endUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "UTC end ISO timestamp"
+        },
+        "dateStr": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Scheduled calendar date string"
+        },
+        "dayOfWeek": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Scheduled day of week"
+        },
+        "timeUtc": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Scheduled UTC time or ISO string"
+        },
+        "instructorId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Host instructor UID"
+        },
+        "instructorName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Host instructor display name"
+        },
+        "meetingId": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Auto-generated classroom or Zoom meeting ID"
+        },
+        "meetingPasscode": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Auto-generated classroom passcode"
+        },
+        "joinUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Auto-generated live classroom student join URL"
+        },
+        "hostStartUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Auto-generated live classroom host start URL"
+        },
+        "isLiveNow": {
+          "type": "boolean",
+          "description": "Whether the live classroom is currently active"
+        },
+        "autoRecord": {
+          "type": "boolean",
+          "description": "Whether session recording is enabled by default"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["lecture", "quiz", "homework", "project", "academic_date", "event"],
+          "description": "Event classification"
+        },
+        "pinnedToBoard": {
+          "type": "boolean",
+          "description": "Whether event is pinned on the bulletin poster board"
+        },
+        "pinColor": {
+          "type": "string",
+          "enum": ["aqua", "emerald", "crimson", "amber"],
+          "description": "Pushpin badge color"
+        },
+        "locationOrLabel": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Room, hall, or online sanctuary label"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether the event is published publicly"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "title", "description", "posterUrl", "courseId", "courseTitle", "startUtc", "endUtc", "type", "pinnedToBoard", "pinColor", "locationOrLabel", "isPublished", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "AdminRecord" },
+      "description": "Trusted administrator roles verified by UID"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "UserAccount" },
+      "description": "Non-PII root account metadata and role state"
+    },
+    "/users/{userId}/public/{profileId}": {
+      "schema": { "$ref": "UserPublicProfile" },
+      "description": "Public display profile with Firebase Storage avatar URL"
+    },
+    "/users/{userId}/private/{infoId}": {
+      "schema": { "$ref": "UserPrivateInfo" },
+      "description": "Strictly isolated PII document containing email"
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "UserPreferences" },
+      "description": "Per-user UI preferences synced across devices (preferred light/dark mode)"
+    },
+    "/courses/{courseId}": {
+      "schema": { "$ref": "Course" },
+      "description": "Published curriculum course documents"
+    },
+    "/courses/{courseId}/enrollments/{userId}": {
+      "schema": { "$ref": "CourseEnrollment" },
+      "description": "Course enrollment subcollection checked for private MP4 recording streaming"
+    },
+    "/courses/{courseId}/recordingCatalog/{recordingId}": {
+      "schema": { "$ref": "CourseRecordingCatalog" },
+      "description": "Safe recording catalog metadata without storage paths"
+    },
+    "/courses/{courseId}/recordings/{recordingId}": {
+      "schema": { "$ref": "CourseRecording" },
+      "description": "Enrollment-gated MP4 recording paths and non-downloadable streaming policy"
+    },
+    "/courses/{courseId}/streamRequests/{requestId}": {
+      "schema": { "$ref": "StreamRequest" },
+      "description": "Per-request verification records validating auth and enrollment before MP4 bucket streaming"
+    },
+    "/communityPosts/{postId}": {
+      "schema": { "$ref": "CommunityPost" },
+      "description": "Community feed posts"
+    },
+    "/communityPosts/{postId}/comments/{commentId}": {
+      "schema": { "$ref": "CommunityComment" },
+      "description": "Comments attached to a community feed post"
+    },
+    "/communityPosts/{postId}/likes/{userId}": {
+      "schema": { "$ref": "CommunityLike" },
+      "description": "Per-user atomic like receipts for community posts"
+    },
+    "/chatMessages/{messageId}": {
+      "schema": { "$ref": "ChatMessage" },
+      "description": "Real-time channel discussion messages"
+    },
+    "/blogPosts/{blogId}": {
+      "schema": { "$ref": "BlogPost" },
+      "description": "Published scholastic blog articles"
+    },
+    "/settings/{settingsId}": {
+      "schema": { "$ref": "PlatformSettings" },
+      "description": "Platform hero and branding settings"
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "AcademyEvent" },
+      "description": "Academy pinned poster board and calendar events"
+    }
+  }
+}

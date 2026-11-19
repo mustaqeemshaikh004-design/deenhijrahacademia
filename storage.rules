@@ -1,0 +1,109 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Global Safety Net: Deny all unspecified bucket paths and prevent bucket enumeration
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapChancellor() {
+      return isVerifiedUser() &&
+        request.auth.token.email == 'mustaqeemshaikh004@gmail.com';
+    }
+
+    // Course .mp4 Recordings Bucket:
+    // - Listing disabled (`allow list: if false`) to prevent path enumeration
+    // - Upload restricted to Administrator Mustaqeem with strict video/mp4 + nonDownloadable/nonShareable metadata
+    // - Streaming gated by orientation status or verified auth (paired with Firestore enrollment check)
+    match /courses/{courseId}/recordings/{fileName} {
+      allow get: if isValidId(courseId) &&
+        resource.contentType == 'video/mp4' &&
+        resource.metadata != null &&
+        'nonDownloadable' in resource.metadata &&
+        resource.metadata['nonDownloadable'] == 'true' &&
+        'nonShareable' in resource.metadata &&
+        resource.metadata['nonShareable'] == 'true' && (
+          isBootstrapChancellor() ||
+          ('isOrientation' in resource.metadata && resource.metadata['isOrientation'] == 'true') ||
+          isVerifiedUser()
+        );
+      allow list: if false;
+      allow create, update: if isValidId(courseId) &&
+        isBootstrapChancellor() &&
+        fileName.matches('^.*\\.mp4$') &&
+        request.resource.size > 0 &&
+        request.resource.size <= 500 * 1024 * 1024 &&
+        request.resource.contentType == 'video/mp4' &&
+        request.resource.metadata != null &&
+        'courseId' in request.resource.metadata &&
+        request.resource.metadata['courseId'] == courseId &&
+        'nonDownloadable' in request.resource.metadata &&
+        request.resource.metadata['nonDownloadable'] == 'true' &&
+        'nonShareable' in request.resource.metadata &&
+        request.resource.metadata['nonShareable'] == 'true' &&
+        'isOrientation' in request.resource.metadata &&
+        request.resource.metadata['isOrientation'] in ['true', 'false'];
+      allow delete: if isValidId(courseId) && isBootstrapChancellor();
+    }
+
+    // Course Watermarked Thumbnails Bucket
+    match /courses/{courseId}/thumbnails/{fileName} {
+      allow get: if isValidId(courseId) && (
+        isVerifiedUser() ||
+        (resource.metadata != null && 'visibility' in resource.metadata && resource.metadata['visibility'] == 'public')
+      );
+      allow list: if false;
+      allow create, update: if isValidId(courseId) &&
+        isBootstrapChancellor() &&
+        request.resource.size > 0 &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp|svg\\+xml)');
+      allow delete: if isValidId(courseId) && isBootstrapChancellor();
+    }
+
+    // User Profile Picture Uploads Bucket (Strictly owner-scoped write, no bucket listing)
+    match /avatars/{userId}/{fileName} {
+      allow get: if isValidId(userId) && (
+        isVerifiedUser() ||
+        (resource.metadata != null && 'visibility' in resource.metadata && resource.metadata['visibility'] == 'public')
+      );
+      allow list: if false;
+      allow create, update: if isValidId(userId) &&
+        isVerifiedUser() &&
+        (request.auth.uid == userId || isBootstrapChancellor()) &&
+        request.resource.size > 0 &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if isValidId(userId) &&
+        isVerifiedUser() &&
+        (request.auth.uid == userId || isBootstrapChancellor());
+    }
+
+    // Platform Branding Media (Hero MP4 video, hero poster, hero image, custom institutional logo)
+    match /branding/{assetName} {
+      allow get: if isVerifiedUser() ||
+        (resource.metadata != null && 'visibility' in resource.metadata && resource.metadata['visibility'] == 'public');
+      allow list: if false;
+      allow create, update: if isBootstrapChancellor() &&
+        request.resource.size > 0 &&
+        request.resource.size <= 250 * 1024 * 1024 && (
+          request.resource.contentType == 'video/mp4' ||
+          request.resource.contentType.matches('image/(jpeg|png|webp|svg\\+xml)')
+        );
+      allow delete: if isBootstrapChancellor();
+    }
+  }
+}

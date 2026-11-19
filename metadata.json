@@ -1,0 +1,6 @@
+{
+  "name": "Deen Hijrah Academia",
+  "description": "Production-grade academy platform customized for administrator Mustaqeem, featuring Seerahverse aesthetics, automated Zoom cloud sync, global timezone auto-clocking, and moderated community hub.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

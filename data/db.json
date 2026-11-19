@@ -1,0 +1,114 @@
+{
+  "users": [
+    {
+      "id": "admin-mustaqeem",
+      "firstName": "Mustaqeem",
+      "lastName": "Shaikh",
+      "email": "mustaqeemshaikh004@gmail.com",
+      "role": "admin",
+      "gender": "male",
+      "createdAt": "2026-11-08T13:06:55.717Z",
+      "lastActive": "2026-11-08T13:06:55.718Z"
+    },
+    {
+      "id": "student-tester",
+      "firstName": "Zayd",
+      "lastName": "Farooq",
+      "email": "zayd.farooq@deenhijrahacademia.edu",
+      "role": "student",
+      "gender": "male",
+      "createdAt": "2026-11-08T13:06:55.718Z",
+      "lastActive": "2026-11-08T13:06:55.718Z"
+    }
+  ],
+  "courses": [],
+  "attendance": [],
+  "submissions": [],
+  "communityPosts": [
+    {
+      "id": "post-1",
+      "authorId": "admin-mustaqeem",
+      "authorName": "Mustaqeem Shaikh",
+      "authorRole": "admin",
+      "authorGender": "male",
+      "content": "Bismillah! Welcome to Deen Hijrah Academia. The academy platform is initialized with Seerahverse aesthetics, automated Zoom cloud recording synchronization, and real-time international timezone clocking. We invite students and seekers of knowledge to join our sacred academic journey.",
+      "category": "announcement",
+      "pinned": true,
+      "createdAt": "2026-11-08T13:06:55.718Z",
+      "likes": 1,
+      "likedByUserIds": [
+        "admin-mustaqeem"
+      ],
+      "comments": [],
+      "flagged": false
+    }
+  ],
+  "chatMessages": [],
+  "moderationLogs": [],
+  "blogPosts": [
+    {
+      "id": "blog-1",
+      "title": "The Sacred Convergence: Classical Tradition Meets Frontier Technology",
+      "excerpt": "How Deen Hijrah Academia bridges timeless scholastic lineage with modern educational architecture.",
+      "content": "In the tradition of profound scholarship, pedagogy requires clarity, discipline, and communal presence. Deen Hijrah Academia establishes an academic standard where live digital halls eliminate geographical distances. Through automated timezone alignment, automated lecture archives, and strict moderation ethics, we cultivate an intellectual sanctuary for global seekers.",
+      "authorName": "Administrator Mustaqeem",
+      "authorBadge": "Founding Chancellor",
+      "readTime": "4 min read",
+      "bannerUrl": "fallback://blog",
+      "publishedAt": "2026-11-08T13:06:55.718Z",
+      "tags": [
+        "Academics",
+        "Foundational Vision",
+        "Scholarship"
+      ]
+    }
+  ],
+  "calendarEvents": [],
+  "settings": {
+    "heroMode": "video",
+    "heroVideoUrl": "",
+    "heroPosterUrl": "fallback://hero",
+    "heroImageUrl": "fallback://hero",
+    "heroHeadline": "Pursue Sacred Knowledge with Rigor & Elegance",
+    "heroSubheadline": "A sanctuary of classical Islamic scholarship engineered with immersive real-time classrooms, automated Zoom lecture archives, and global timezone intelligence.",
+    "customLogoUrl": "",
+    "customNavItems": [
+      {
+        "id": "nav-home",
+        "label": "Home",
+        "key": "home",
+        "isSystem": true
+      },
+      {
+        "id": "nav-courses",
+        "label": "Courses",
+        "key": "courses",
+        "isSystem": true
+      },
+      {
+        "id": "nav-blogs",
+        "label": "Blogs",
+        "key": "blogs",
+        "isSystem": true
+      },
+      {
+        "id": "nav-faculty",
+        "label": "Faculty",
+        "key": "faculty",
+        "isSystem": true
+      },
+      {
+        "id": "nav-about",
+        "label": "About",
+        "key": "about",
+        "isSystem": true
+      },
+      {
+        "id": "nav-contact",
+        "label": "Contact",
+        "key": "contact",
+        "isSystem": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,152 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-portal-theme="dark"], [data-portal-theme="dark"] *, .dark:not([data-portal-theme="light"]):not([data-portal-theme="light"] *), .dark *:not([data-portal-theme="light"], [data-portal-theme="light"] *)));
+
+@layer base {
+  :root {
+    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  
+  body {
+    font-family: var(--font-body);
+    background-color: #0A192F;
+    color: #F1F5F9;
+  }
+
+  :root:not(.dark) body {
+    background-color: #F8FAFC;
+    color: #0F172A;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+/* Custom glassmorphism and glow effects */
+.glass-panel {
+  background: rgba(10, 25, 47, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-hover {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-hover:hover {
+  background: rgba(15, 33, 62, 0.85);
+  border-color: rgba(0, 242, 254, 0.3);
+  box-shadow: 0 10px 30px -10px rgba(0, 242, 254, 0.15);
+}
+
+.glow-aqua {
+  box-shadow: 0 0 25px -5px rgba(0, 242, 254, 0.35);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.35);
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #071120;
+}
+:root:not(.dark) ::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 9999px;
+}
+:root:not(.dark) ::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Source Code Academy inspired GPU-composited floating course thumbnails */
+@keyframes dhaFloatCard {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+@keyframes dhaPulseLive {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    opacity: 0.7;
+  }
+}
+
+@keyframes dhaSpinSlow {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dhaSpinReverse {
+  0% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes dhaLogoFloat {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -3px, 0) scale(1.06);
+  }
+}
+
+.animate-dha-float {
+  animation: dhaFloatCard 5.5s ease-in-out infinite;
+  will-change: transform;
+}
+
+.animate-dha-live-dot {
+  animation: dhaPulseLive 1.8s ease-in-out infinite;
+}
+
+.animate-dha-spin-slow {
+  animation: dhaSpinSlow 3.6s linear infinite;
+  will-change: transform;
+}
+
+.animate-dha-spin-fast {
+  animation: dhaSpinSlow 1.25s linear infinite;
+  will-change: transform;
+}
+
+.animate-dha-spin-reverse {
+  animation: dhaSpinReverse 2.2s linear infinite;
+  will-change: transform;
+}
+
+.animate-dha-logo-float {
+  animation: dhaLogoFloat 2.4s ease-in-out infinite;
+  will-change: transform;
+}
+

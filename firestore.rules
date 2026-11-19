@@ -1,0 +1,1052 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar Global Safety Net: Default deny all unspecified collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Boot Connection Probe (SKILL.md Section: Validate Connection to Firestore)
+    match /test/{testId} {
+      allow get: if testId == 'connection';
+      allow list, write: if false;
+    }
+
+    // ==================== GLOBAL HARDENED PRIMITIVES ====================
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapChancellor() {
+      return isVerifiedUser() &&
+        request.auth.token.email == 'mustaqeemshaikh004@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapChancellor() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function courseExists(courseId) {
+      return exists(/databases/$(database)/documents/courses/$(courseId));
+    }
+
+    function isEnrolledStudent(courseId, uid) {
+      return exists(/databases/$(database)/documents/courses/$(courseId)/enrollments/$(uid)) &&
+        get(/databases/$(database)/documents/courses/$(courseId)/enrollments/$(uid)).data.status in ['active', 'completed'];
+    }
+
+    // ==================== BLUEPRINT VALIDATION HELPERS ====================
+
+    function isValidAdminRecord(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'role', 'grantedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        data.role == 'admin' &&
+        data.grantedAt is timestamp;
+    }
+
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll(['id', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'role', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.id == userId &&
+        data.role is string &&
+        data.role in ['admin', 'teacher', 'student'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPublicProfile(data, userId) {
+      return data.keys().hasAll(['id', 'firstName', 'lastName', 'gender', 'visibility', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'firstName', 'lastName', 'gender', 'avatarUrl', 'avatarStoragePath', 'visibility', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.id == userId &&
+        data.firstName is string &&
+        data.firstName.size() >= 1 &&
+        data.firstName.size() <= 100 &&
+        data.lastName is string &&
+        data.lastName.size() >= 1 &&
+        data.lastName.size() <= 100 &&
+        data.gender is string &&
+        data.gender in ['male', 'female'] &&
+        data.visibility == 'public' &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 2048)) &&
+        (!('avatarStoragePath' in data) || (
+          data.avatarStoragePath is string &&
+          data.avatarStoragePath.size() <= 512 &&
+          (data.avatarStoragePath == '' || data.avatarStoragePath.matches('^avatars/' + userId + '/.*$'))
+        )) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.keys().hasAll(['id', 'email', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'email', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.id == userId &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPreferences(data, userId, prefId) {
+      return data.keys().hasAll(['id', 'userId', 'theme', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'theme', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.id == prefId &&
+        data.id == 'ui' &&
+        isValidId(data.userId) &&
+        data.userId == userId &&
+        data.userId == request.auth.uid &&
+        data.theme is string &&
+        data.theme in ['dark', 'light'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCourse(data, courseId) {
+      return data.keys().hasAll([
+          'id', 'code', 'title', 'description', 'instructorId', 'instructorName',
+          'status', 'level', 'thumbnail', 'totalLectures', 'isPublished', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'code', 'title', 'description', 'instructorId', 'instructorName',
+          'status', 'level', 'thumbnail', 'totalLectures', 'isPublished', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == courseId &&
+        data.code is string &&
+        data.code.size() >= 1 &&
+        data.code.size() <= 32 &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.description is string &&
+        data.description.size() >= 1 &&
+        data.description.size() <= 3000 &&
+        isValidId(data.instructorId) &&
+        data.instructorName is string &&
+        data.instructorName.size() >= 1 &&
+        data.instructorName.size() <= 120 &&
+        data.status is string &&
+        data.status in ['Open for Enrollment', 'Active', 'Coming Soon'] &&
+        data.level is string &&
+        data.level in ['Beginner', 'Intermediate', 'Advanced'] &&
+        data.thumbnail is string &&
+        data.thumbnail.size() <= 2048 &&
+        data.totalLectures is number &&
+        data.totalLectures >= 0 &&
+        data.totalLectures <= 1000 &&
+        data.isPublished is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCourseEnrollment(data, courseId, userId) {
+      return data.keys().hasAll(['userId', 'courseId', 'status', 'enrolledAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'courseId', 'status', 'enrolledAt', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        data.userId == userId &&
+        isValidId(data.courseId) &&
+        data.courseId == courseId &&
+        data.status is string &&
+        data.status in ['active', 'completed', 'revoked'] &&
+        data.enrolledAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCourseRecordingCatalog(data, courseId, recordingId) {
+      return data.keys().hasAll([
+          'id', 'courseId', 'title', 'duration', 'thumbnailUrl',
+          'isOrientation', 'mimeType', 'fileSize', 'recordedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'courseId', 'title', 'duration', 'thumbnailUrl',
+          'teaserUrl', 'teaserStoragePath',
+          'supplementaryPdfUrl', 'supplementaryPdfName', 'supplementaryPdfStoragePath',
+          'isOrientation', 'mimeType', 'fileSize', 'recordedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == recordingId &&
+        isValidId(data.courseId) &&
+        data.courseId == courseId &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.duration is string &&
+        data.duration.size() >= 1 &&
+        data.duration.size() <= 120 &&
+        data.thumbnailUrl is string &&
+        data.thumbnailUrl.size() <= 2048 &&
+        (!('teaserUrl' in data) || (data.teaserUrl is string && data.teaserUrl.size() <= 2048)) &&
+        (!('teaserStoragePath' in data) || (data.teaserStoragePath is string && data.teaserStoragePath.size() <= 512)) &&
+        (!('supplementaryPdfUrl' in data) || (data.supplementaryPdfUrl is string && data.supplementaryPdfUrl.size() <= 2048)) &&
+        (!('supplementaryPdfName' in data) || (data.supplementaryPdfName is string && data.supplementaryPdfName.size() <= 200)) &&
+        (!('supplementaryPdfStoragePath' in data) || (data.supplementaryPdfStoragePath is string && data.supplementaryPdfStoragePath.size() <= 512)) &&
+        data.isOrientation is bool &&
+        data.mimeType == 'video/mp4' &&
+        data.fileSize is string &&
+        data.fileSize.size() <= 120 &&
+        data.recordedAt is string &&
+        data.recordedAt.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCourseRecording(data, courseId, recordingId) {
+      return data.keys().hasAll([
+          'id', 'courseId', 'title', 'duration', 'thumbnailUrl', 'storagePath', 'videoUrl',
+          'mimeType', 'nonDownloadable', 'nonShareable', 'isOrientation', 'uploadedBy',
+          'syncedFromZoomWebhook', 'fileSize', 'recordedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'courseId', 'title', 'duration', 'thumbnailUrl', 'storagePath', 'videoUrl',
+          'teaserUrl', 'teaserStoragePath',
+          'supplementaryPdfUrl', 'supplementaryPdfName', 'supplementaryPdfStoragePath',
+          'mimeType', 'nonDownloadable', 'nonShareable', 'isOrientation', 'uploadedBy',
+          'syncedFromZoomWebhook', 'fileSize', 'recordedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == recordingId &&
+        isValidId(data.courseId) &&
+        data.courseId == courseId &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.duration is string &&
+        data.duration.size() >= 1 &&
+        data.duration.size() <= 120 &&
+        data.thumbnailUrl is string &&
+        data.thumbnailUrl.size() <= 2048 &&
+        (!('teaserUrl' in data) || (data.teaserUrl is string && data.teaserUrl.size() <= 2048)) &&
+        (!('teaserStoragePath' in data) || (data.teaserStoragePath is string && data.teaserStoragePath.size() <= 512)) &&
+        (!('supplementaryPdfUrl' in data) || (data.supplementaryPdfUrl is string && data.supplementaryPdfUrl.size() <= 2048)) &&
+        (!('supplementaryPdfName' in data) || (data.supplementaryPdfName is string && data.supplementaryPdfName.size() <= 200)) &&
+        (!('supplementaryPdfStoragePath' in data) || (data.supplementaryPdfStoragePath is string && data.supplementaryPdfStoragePath.size() <= 512)) &&
+        data.storagePath is string &&
+        data.storagePath.size() <= 512 &&
+        (data.storagePath == '' || data.storagePath.matches('^courses/' + courseId + '/recordings/.*\\.mp4$')) &&
+        data.videoUrl is string &&
+        data.videoUrl.size() <= 2048 &&
+        (data.storagePath.size() > 0 || data.videoUrl.size() > 0 || ('teaserUrl' in data && data.teaserUrl.size() > 0)) &&
+        data.mimeType == 'video/mp4' &&
+        data.nonDownloadable == true &&
+        data.nonShareable == true &&
+        data.isOrientation is bool &&
+        isValidId(data.uploadedBy) &&
+        data.syncedFromZoomWebhook is bool &&
+        data.fileSize is string &&
+        data.fileSize.size() <= 120 &&
+        data.recordedAt is string &&
+        data.recordedAt.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStreamRequest(data, courseId, requestId) {
+      return data.keys().hasAll([
+          'id', 'courseId', 'recordingId', 'userId', 'storagePath',
+          'mimeType', 'nonDownloadable', 'accessType', 'requestedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'courseId', 'recordingId', 'userId', 'storagePath',
+          'mimeType', 'nonDownloadable', 'accessType', 'requestedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == requestId &&
+        isValidId(data.courseId) &&
+        data.courseId == courseId &&
+        isValidId(data.recordingId) &&
+        isValidId(data.userId) &&
+        data.userId == request.auth.uid &&
+        data.storagePath is string &&
+        data.storagePath.size() >= 1 &&
+        data.storagePath.size() <= 512 &&
+        data.storagePath.matches('^courses/' + courseId + '/recordings/.*\\.mp4$') &&
+        data.mimeType == 'video/mp4' &&
+        data.nonDownloadable == true &&
+        data.accessType is string &&
+        data.accessType in ['orientation_preview', 'enrolled_stream', 'admin_stream'] &&
+        data.requestedAt is timestamp;
+    }
+
+    function isValidCommunityPost(data, postId) {
+      return data.keys().hasAll([
+          'id', 'authorId', 'authorName', 'authorRole', 'authorGender',
+          'content', 'category', 'pinned', 'flagged', 'likes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'authorId', 'authorName', 'authorRole', 'authorGender',
+          'mediaUrl', 'authorAvatar', 'content', 'category', 'pinned', 'flagged',
+          'likes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == postId &&
+        isValidId(data.authorId) &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 120 &&
+        data.authorRole is string &&
+        data.authorRole in ['admin', 'teacher', 'student'] &&
+        data.authorGender is string &&
+        data.authorGender in ['male', 'female'] &&
+        (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 2048)) &&
+        (!('authorAvatar' in data) || (data.authorAvatar is string && data.authorAvatar.size() <= 2048)) &&
+        data.content is string &&
+        data.content.size() >= 1 &&
+        data.content.size() <= 5000 &&
+        data.category is string &&
+        data.category in ['announcement', 'community'] &&
+        data.pinned is bool &&
+        data.flagged is bool &&
+        data.likes is number &&
+        data.likes >= 0 &&
+        data.likes <= 1000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCommunityComment(data, postId, commentId) {
+      return data.keys().hasAll([
+          'id', 'postId', 'authorId', 'authorName', 'authorRole', 'authorGender',
+          'content', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'postId', 'authorId', 'authorName', 'authorRole', 'authorGender',
+          'authorAvatar', 'content', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == commentId &&
+        isValidId(data.postId) &&
+        data.postId == postId &&
+        isValidId(data.authorId) &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 120 &&
+        data.authorRole is string &&
+        data.authorRole in ['admin', 'teacher', 'student'] &&
+        data.authorGender is string &&
+        data.authorGender in ['male', 'female'] &&
+        (!('authorAvatar' in data) || (data.authorAvatar is string && data.authorAvatar.size() <= 2048)) &&
+        data.content is string &&
+        data.content.size() >= 1 &&
+        data.content.size() <= 2000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCommunityLike(data, postId, userId) {
+      return data.keys().hasAll(['userId', 'postId', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'postId', 'createdAt']) &&
+        isValidId(data.userId) &&
+        data.userId == userId &&
+        isValidId(data.postId) &&
+        data.postId == postId &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidChatMessage(data, messageId) {
+      return data.keys().hasAll([
+          'id', 'channelId', 'senderId', 'senderName', 'senderRole', 'senderGender',
+          'content', 'flagged', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'courseId', 'channelId', 'senderId', 'senderName', 'senderRole', 'senderGender',
+          'senderAvatar', 'content', 'flagged', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == messageId &&
+        (!('courseId' in data) || (data.courseId is string && data.courseId.size() <= 128)) &&
+        data.channelId is string &&
+        data.channelId.size() >= 1 &&
+        data.channelId.size() <= 128 &&
+        isValidId(data.senderId) &&
+        data.senderName is string &&
+        data.senderName.size() >= 1 &&
+        data.senderName.size() <= 120 &&
+        data.senderRole is string &&
+        data.senderRole in ['admin', 'teacher', 'student'] &&
+        data.senderGender is string &&
+        data.senderGender in ['male', 'female'] &&
+        (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 2048)) &&
+        data.content is string &&
+        data.content.size() >= 1 &&
+        data.content.size() <= 2000 &&
+        data.flagged is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidBlogPost(data, blogId) {
+      return data.keys().hasAll([
+          'id', 'title', 'excerpt', 'content', 'authorName', 'authorBadge',
+          'readTime', 'bannerUrl', 'tags', 'isPublished', 'publishedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'title', 'excerpt', 'content', 'authorName', 'authorBadge',
+          'readTime', 'bannerUrl', 'tags', 'isPublished', 'publishedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == blogId &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.excerpt is string &&
+        data.excerpt.size() >= 1 &&
+        data.excerpt.size() <= 600 &&
+        data.content is string &&
+        data.content.size() >= 1 &&
+        data.content.size() <= 50000 &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 120 &&
+        data.authorBadge is string &&
+        data.authorBadge.size() <= 120 &&
+        data.readTime is string &&
+        data.readTime.size() <= 60 &&
+        data.bannerUrl is string &&
+        data.bannerUrl.size() <= 2048 &&
+        data.tags is list &&
+        data.tags.size() <= 10 &&
+        (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 60)) &&
+        data.isPublished is bool &&
+        data.publishedAt is string &&
+        data.publishedAt.size() >= 1 &&
+        data.publishedAt.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformSettings(data) {
+      return data.keys().hasAll([
+          'heroMode', 'heroVideoUrl', 'heroPosterUrl', 'heroImageUrl',
+          'heroHeadline', 'heroSubheadline', 'customLogoUrl', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'heroMode', 'heroVideoUrl', 'heroPosterUrl', 'heroImageUrl',
+          'heroHeadline', 'heroSubheadline', 'customLogoUrl', 'customNavItems', 'updatedAt'
+        ]) &&
+        data.heroMode is string &&
+        data.heroMode in ['video', 'image'] &&
+        data.heroVideoUrl is string &&
+        data.heroVideoUrl.size() <= 2048 &&
+        data.heroPosterUrl is string &&
+        data.heroPosterUrl.size() <= 2048 &&
+        data.heroImageUrl is string &&
+        data.heroImageUrl.size() <= 2048 &&
+        data.heroHeadline is string &&
+        data.heroHeadline.size() >= 1 &&
+        data.heroHeadline.size() <= 200 &&
+        data.heroSubheadline is string &&
+        data.heroSubheadline.size() >= 1 &&
+        data.heroSubheadline.size() <= 1000 &&
+        data.customLogoUrl is string &&
+        data.customLogoUrl.size() <= 2048 &&
+        (!('customNavItems' in data) || (
+          data.customNavItems is list &&
+          data.customNavItems.size() <= 20 &&
+          (data.customNavItems.size() == 0 || data.customNavItems[0] is map)
+        )) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAcademyEvent(data, eventId) {
+      return data.keys().hasAll([
+          'id', 'title', 'description', 'posterUrl', 'courseId', 'courseTitle',
+          'startUtc', 'endUtc', 'type', 'pinnedToBoard', 'pinColor',
+          'locationOrLabel', 'isPublished', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'title', 'description', 'posterUrl', 'courseId', 'courseTitle',
+          'startUtc', 'endUtc', 'dateStr', 'dayOfWeek', 'timeUtc',
+          'instructorId', 'instructorName', 'meetingId', 'meetingPasscode',
+          'joinUrl', 'hostStartUrl', 'isLiveNow', 'autoRecord',
+          'type', 'pinnedToBoard', 'pinColor',
+          'locationOrLabel', 'isPublished', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == eventId &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.description is string &&
+        data.description.size() <= 3000 &&
+        data.posterUrl is string &&
+        data.posterUrl.size() <= 2048 &&
+        data.courseId is string &&
+        data.courseId.size() <= 128 &&
+        data.courseTitle is string &&
+        data.courseTitle.size() <= 200 &&
+        data.startUtc is string &&
+        data.startUtc.size() >= 1 &&
+        data.startUtc.size() <= 120 &&
+        data.endUtc is string &&
+        data.endUtc.size() >= 1 &&
+        data.endUtc.size() <= 120 &&
+        (!('dateStr' in data) || (data.dateStr is string && data.dateStr.size() <= 40)) &&
+        (!('dayOfWeek' in data) || (data.dayOfWeek is string && data.dayOfWeek.size() <= 40)) &&
+        (!('timeUtc' in data) || (data.timeUtc is string && data.timeUtc.size() <= 120)) &&
+        (!('instructorId' in data) || (data.instructorId is string && data.instructorId.size() <= 128)) &&
+        (!('instructorName' in data) || (data.instructorName is string && data.instructorName.size() <= 120)) &&
+        (!('meetingId' in data) || (data.meetingId is string && data.meetingId.size() <= 120)) &&
+        (!('meetingPasscode' in data) || (data.meetingPasscode is string && data.meetingPasscode.size() <= 60)) &&
+        (!('joinUrl' in data) || (data.joinUrl is string && data.joinUrl.size() <= 2048)) &&
+        (!('hostStartUrl' in data) || (data.hostStartUrl is string && data.hostStartUrl.size() <= 2048)) &&
+        (!('isLiveNow' in data) || data.isLiveNow is bool) &&
+        (!('autoRecord' in data) || data.autoRecord is bool) &&
+        data.type is string &&
+        data.type in ['lecture', 'quiz', 'homework', 'project', 'academic_date', 'event'] &&
+        data.pinnedToBoard is bool &&
+        data.pinColor is string &&
+        data.pinColor in ['aqua', 'emerald', 'crimson', 'amber'] &&
+        data.locationOrLabel is string &&
+        data.locationOrLabel.size() <= 120 &&
+        data.isPublished is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // ==================== COLLECTION MATCH BLOCKS ====================
+
+    // Admins Privilege Source of Truth
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser() && (request.auth.uid == userId || isAdmin());
+      allow list: if false;
+      allow create: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidAdminRecord(incoming(), userId) &&
+        incoming().grantedAt == request.time &&
+        (isBootstrapChancellor() || isAdmin());
+      allow update: if false;
+      allow delete: if isValidId(userId) &&
+        isBootstrapChancellor() &&
+        userId != request.auth.uid;
+    }
+
+    // Root Non-PII User Accounts + Split Public/Private Profiles
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser() && (request.auth.uid == userId || isAdmin());
+      allow list: if isVerifiedUser() && resource.data.id == request.auth.uid;
+      allow create: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidUserAccount(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (request.auth.uid == userId && incoming().role == 'student') ||
+          (request.auth.uid == userId && isBootstrapChancellor() && incoming().role == 'admin')
+        );
+      allow update: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidUserAccount(incoming(), userId) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])) ||
+          (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) &&
+        isAdmin() &&
+        userId != request.auth.uid &&
+        existing().role != 'admin';
+
+      // Public Display Profile (Avatar URL / Storage Path — No PII)
+      match /public/{profileId} {
+        allow get: if isValidId(userId) && isValidId(profileId) && profileId == 'profile' && (
+          (resource != null && existing().visibility == 'public') ||
+          (isVerifiedUser() && (request.auth.uid == userId || isAdmin()))
+        );
+        allow list: if resource.data.visibility == 'public' ||
+          (isVerifiedUser() && resource.data.id == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(profileId) &&
+          profileId == 'profile' &&
+          isVerifiedUser() &&
+          isValidUserPublicProfile(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (request.auth.uid == userId || isAdmin());
+        allow update: if isValidId(userId) && isValidId(profileId) &&
+          profileId == 'profile' &&
+          isVerifiedUser() &&
+          isValidUserPublicProfile(incoming(), userId) &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (
+              request.auth.uid == userId &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'firstName', 'lastName', 'gender', 'avatarUrl', 'avatarStoragePath', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(profileId) && isAdmin();
+      }
+
+      // Strictly Isolated PII Document (Owner or Verified Admin only, List disabled)
+      match /private/{infoId} {
+        allow get: if isValidId(userId) && isValidId(infoId) &&
+          infoId == 'info' &&
+          isVerifiedUser() &&
+          (request.auth.uid == userId || isAdmin());
+        allow list: if false;
+        allow create: if isValidId(userId) && isValidId(infoId) &&
+          infoId == 'info' &&
+          isVerifiedUser() &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (request.auth.uid == userId && incoming().email == request.auth.token.email)
+          );
+        allow update: if isValidId(userId) && isValidId(infoId) &&
+          infoId == 'info' &&
+          isVerifiedUser() &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (
+              request.auth.uid == userId &&
+              incoming().email == existing().email &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(infoId) && isAdmin();
+      }
+
+      // Strictly Isolated Per-User UI Preferences (Cross-Device Light/Dark Theme Sync)
+      match /preferences/{prefId} {
+        allow get: if isValidId(userId) && isValidId(prefId) &&
+          prefId == 'ui' &&
+          isVerifiedUser() &&
+          (request.auth.uid == userId || isAdmin());
+        allow list: if false;
+        allow create: if isValidId(userId) && isValidId(prefId) &&
+          prefId == 'ui' &&
+          isVerifiedUser() &&
+          isValidUserPreferences(incoming(), userId, prefId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          request.auth.uid == userId &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isValidId(userId) && isValidId(prefId) &&
+          prefId == 'ui' &&
+          isVerifiedUser() &&
+          isValidUserPreferences(incoming(), userId, prefId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          request.auth.uid == userId &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(prefId) &&
+          prefId == 'ui' &&
+          isVerifiedUser() &&
+          (request.auth.uid == userId || isAdmin());
+      }
+    }
+
+    // Courses Catalog & Subcollections
+    match /courses/{courseId} {
+      allow get: if isValidId(courseId) && ((resource != null && existing().isPublished == true) || isAdmin());
+      allow list: if resource.data.isPublished == true;
+      allow create: if isValidId(courseId) &&
+        isAdmin() &&
+        isValidCourse(incoming(), courseId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(courseId) &&
+        isAdmin() &&
+        isValidCourse(incoming(), courseId) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'code', 'title', 'description', 'instructorId', 'instructorName',
+          'status', 'level', 'thumbnail', 'totalLectures', 'isPublished', 'updatedAt'
+        ]);
+      allow delete: if isValidId(courseId) && isAdmin();
+
+      // Master Gate Subcollection: Course Enrollments
+      match /enrollments/{userId} {
+        allow get: if isValidId(courseId) && isValidId(userId) &&
+          isVerifiedUser() &&
+          (request.auth.uid == userId || isAdmin());
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(courseId) && isValidId(userId) &&
+          isVerifiedUser() &&
+          isValidCourseEnrollment(incoming(), courseId, userId) &&
+          incoming().enrolledAt == request.time &&
+          incoming().updatedAt == request.time &&
+          courseExists(courseId) && (
+            isAdmin() || (
+              request.auth.uid == userId &&
+              incoming().status == 'active' &&
+              get(/databases/$(database)/documents/courses/$(courseId)).data.isPublished == true
+            )
+          );
+        allow update: if isValidId(courseId) && isValidId(userId) &&
+          isVerifiedUser() &&
+          isValidCourseEnrollment(incoming(), courseId, userId) &&
+          incoming().userId == existing().userId &&
+          incoming().courseId == existing().courseId &&
+          incoming().enrolledAt == existing().enrolledAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (
+              request.auth.uid == userId &&
+              existing().status == 'active' &&
+              incoming().status == 'active' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+            )
+          );
+        allow delete: if isValidId(courseId) && isValidId(userId) && isAdmin();
+      }
+
+      // Safe Public Lecture Index (No storagePath or private MP4 URLs)
+      match /recordingCatalog/{recordingId} {
+        allow get: if isValidId(courseId) && isValidId(recordingId) && (
+          (resource != null && existing().courseId == courseId && existing().mimeType == 'video/mp4') ||
+          isAdmin()
+        );
+        allow list: if resource.data.courseId == courseId &&
+          resource.data.mimeType == 'video/mp4';
+        allow create: if isValidId(courseId) && isValidId(recordingId) &&
+          isAdmin() &&
+          isValidCourseRecordingCatalog(incoming(), courseId, recordingId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          courseExists(courseId);
+        allow update: if isValidId(courseId) && isValidId(recordingId) &&
+          isAdmin() &&
+          isValidCourseRecordingCatalog(incoming(), courseId, recordingId) &&
+          incoming().id == existing().id &&
+          incoming().courseId == existing().courseId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'duration', 'thumbnailUrl', 'teaserUrl', 'teaserStoragePath',
+            'supplementaryPdfUrl', 'supplementaryPdfName', 'supplementaryPdfStoragePath',
+            'isOrientation', 'mimeType', 'fileSize', 'recordedAt', 'updatedAt'
+          ]);
+        allow delete: if isValidId(courseId) && isValidId(recordingId) && isAdmin();
+      }
+
+      // Protected MP4 Recording Paths (Private lectures require verified auth + active enrollment)
+      match /recordings/{recordingId} {
+        allow get: if isValidId(courseId) && isValidId(recordingId) && (
+          (resource == null && isAdmin()) || (
+            resource != null &&
+            existing().nonDownloadable == true &&
+            existing().nonShareable == true &&
+            existing().mimeType == 'video/mp4' && (
+              existing().isOrientation == true ||
+              (isVerifiedUser() && isEnrolledStudent(courseId, request.auth.uid)) ||
+              isAdmin()
+            )
+          )
+        );
+        allow list: if (resource.data.isOrientation == true && resource.data.nonDownloadable == true) ||
+          (isVerifiedUser() && resource.data.uploadedBy == request.auth.uid);
+        allow create: if isValidId(courseId) && isValidId(recordingId) &&
+          isAdmin() &&
+          isValidCourseRecording(incoming(), courseId, recordingId) &&
+          incoming().uploadedBy == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          courseExists(courseId);
+        allow update: if isValidId(courseId) && isValidId(recordingId) &&
+          isAdmin() &&
+          isValidCourseRecording(incoming(), courseId, recordingId) &&
+          incoming().id == existing().id &&
+          incoming().courseId == existing().courseId &&
+          incoming().uploadedBy == existing().uploadedBy &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'duration', 'thumbnailUrl', 'teaserUrl', 'teaserStoragePath',
+            'supplementaryPdfUrl', 'supplementaryPdfName', 'supplementaryPdfStoragePath',
+            'storagePath', 'videoUrl', 'mimeType', 'nonDownloadable', 'nonShareable',
+            'isOrientation', 'syncedFromZoomWebhook', 'fileSize', 'recordedAt', 'updatedAt'
+          ]);
+        allow delete: if isValidId(courseId) && isValidId(recordingId) && isAdmin();
+      }
+
+      // Per-Stream Authorization Gate for Firebase Storage MP4 Bucket Fetches
+      match /streamRequests/{requestId} {
+        allow get: if isValidId(courseId) && isValidId(requestId) &&
+          isVerifiedUser() && (
+            (resource == null && isAdmin()) ||
+            (resource != null && (existing().userId == request.auth.uid || isAdmin()))
+          );
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(courseId) && isValidId(requestId) &&
+          isVerifiedUser() &&
+          isValidStreamRequest(incoming(), courseId, requestId) &&
+          incoming().requestedAt == request.time &&
+          courseExists(courseId) &&
+          exists(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)) &&
+          get(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)).data.mimeType == 'video/mp4' &&
+          get(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)).data.nonDownloadable == true &&
+          get(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)).data.nonShareable == true &&
+          get(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)).data.storagePath == incoming().storagePath && (
+            (incoming().accessType == 'admin_stream' && isAdmin()) ||
+            (
+              incoming().accessType == 'orientation_preview' &&
+              get(/databases/$(database)/documents/courses/$(courseId)/recordings/$(incoming().recordingId)).data.isOrientation == true
+            ) ||
+            (
+              incoming().accessType == 'enrolled_stream' &&
+              isEnrolledStudent(courseId, request.auth.uid)
+            )
+          );
+        allow update: if false;
+        allow delete: if isValidId(courseId) && isValidId(requestId) && isAdmin();
+      }
+    }
+
+    // Community Feed Posts & Nested Comments / Atomic Likes
+    match /communityPosts/{postId} {
+      allow get: if isValidId(postId) && ((resource != null && existing().flagged == false) || isAdmin());
+      allow list: if resource.data.flagged == false;
+      allow create: if isValidId(postId) &&
+        isVerifiedUser() &&
+        isValidCommunityPost(incoming(), postId) &&
+        incoming().authorId == request.auth.uid &&
+        incoming().flagged == false &&
+        incoming().likes == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (incoming().pinned == false && incoming().category == 'community' && incoming().authorRole == 'student')
+        );
+      allow update: if isValidId(postId) &&
+        isVerifiedUser() &&
+        isValidCommunityPost(incoming(), postId) &&
+        incoming().id == existing().id &&
+        incoming().authorId == existing().authorId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'content', 'mediaUrl', 'category', 'pinned', 'flagged', 'likes', 'updatedAt'
+          ])) ||
+          (
+            existing().authorId == request.auth.uid &&
+            existing().flagged == false &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['content', 'mediaUrl', 'updatedAt'])
+          ) ||
+          (
+            existing().flagged == false &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['likes', 'updatedAt']) && (
+              (
+                incoming().likes == existing().likes + 1 &&
+                !exists(/databases/$(database)/documents/communityPosts/$(postId)/likes/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/communityPosts/$(postId)/likes/$(request.auth.uid))
+              ) ||
+              (
+                incoming().likes == existing().likes - 1 &&
+                existing().likes >= 1 &&
+                exists(/databases/$(database)/documents/communityPosts/$(postId)/likes/$(request.auth.uid)) &&
+                !existsAfter(/databases/$(database)/documents/communityPosts/$(postId)/likes/$(request.auth.uid))
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(postId) && isVerifiedUser() && (existing().authorId == request.auth.uid || isAdmin());
+
+      match /comments/{commentId} {
+        allow get: if isValidId(postId) && isValidId(commentId) && (
+          (resource != null && exists(/databases/$(database)/documents/communityPosts/$(postId)) && get(/databases/$(database)/documents/communityPosts/$(postId)).data.flagged == false) ||
+          isAdmin()
+        );
+        allow list: if isValidId(postId) && resource.data.postId == postId;
+        allow create: if isValidId(postId) && isValidId(commentId) &&
+          isVerifiedUser() &&
+          isValidCommunityComment(incoming(), postId, commentId) &&
+          incoming().authorId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/communityPosts/$(postId)) &&
+          get(/databases/$(database)/documents/communityPosts/$(postId)).data.flagged == false && (
+            isAdmin() ||
+            incoming().authorRole == 'student'
+          );
+        allow update: if isValidId(postId) && isValidId(commentId) &&
+          isVerifiedUser() &&
+          isValidCommunityComment(incoming(), postId, commentId) &&
+          incoming().id == existing().id &&
+          incoming().postId == existing().postId &&
+          incoming().authorId == existing().authorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (
+              existing().authorId == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(postId) && isValidId(commentId) &&
+          isVerifiedUser() &&
+          (existing().authorId == request.auth.uid || isAdmin());
+      }
+
+      match /likes/{userId} {
+        allow get: if isValidId(postId) && isValidId(userId) &&
+          isVerifiedUser() &&
+          (request.auth.uid == userId || isAdmin());
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(postId) && isValidId(userId) &&
+          isVerifiedUser() &&
+          request.auth.uid == userId &&
+          isValidCommunityLike(incoming(), postId, userId) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/communityPosts/$(postId)) &&
+          get(/databases/$(database)/documents/communityPosts/$(postId)).data.flagged == false &&
+          getAfter(/databases/$(database)/documents/communityPosts/$(postId)).data.likes ==
+            get(/databases/$(database)/documents/communityPosts/$(postId)).data.likes + 1;
+        allow update: if false;
+        allow delete: if isValidId(postId) && isValidId(userId) &&
+          isVerifiedUser() && (
+            isAdmin() || (
+              request.auth.uid == userId &&
+              exists(/databases/$(database)/documents/communityPosts/$(postId)) &&
+              get(/databases/$(database)/documents/communityPosts/$(postId)).data.likes >= 1 &&
+              getAfter(/databases/$(database)/documents/communityPosts/$(postId)).data.likes ==
+                get(/databases/$(database)/documents/communityPosts/$(postId)).data.likes - 1
+            )
+          );
+      }
+    }
+
+    // Real-Time Channel Discussion Messages
+    match /chatMessages/{messageId} {
+      allow get: if isValidId(messageId) && ((resource != null && existing().flagged == false) || isAdmin());
+      allow list: if resource.data.flagged == false;
+      allow create: if isValidId(messageId) &&
+        isVerifiedUser() &&
+        isValidChatMessage(incoming(), messageId) &&
+        incoming().senderId == request.auth.uid &&
+        incoming().flagged == false &&
+        incoming().createdAt == request.time && (
+          isAdmin() ||
+          incoming().senderRole == 'student'
+        );
+      allow update: if isValidId(messageId) &&
+        isAdmin() &&
+        isValidChatMessage(incoming(), messageId) &&
+        incoming().id == existing().id &&
+        incoming().senderId == existing().senderId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['flagged', 'content']);
+      allow delete: if isValidId(messageId) &&
+        isVerifiedUser() &&
+        (existing().senderId == request.auth.uid || isAdmin());
+    }
+
+    // Published Scholastic Blogs
+    match /blogPosts/{blogId} {
+      allow get: if isValidId(blogId) && ((resource != null && existing().isPublished == true) || isAdmin());
+      allow list: if resource.data.isPublished == true;
+      allow create: if isValidId(blogId) &&
+        isAdmin() &&
+        isValidBlogPost(incoming(), blogId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(blogId) &&
+        isAdmin() &&
+        isValidBlogPost(incoming(), blogId) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'excerpt', 'content', 'authorName', 'authorBadge',
+          'readTime', 'bannerUrl', 'tags', 'isPublished', 'publishedAt', 'updatedAt'
+        ]);
+      allow delete: if isValidId(blogId) && isAdmin();
+    }
+
+    // Platform Hero & Branding Settings
+    match /settings/{settingsId} {
+      allow get: if isValidId(settingsId) && settingsId == 'platform';
+      allow list: if false;
+      allow create: if isValidId(settingsId) &&
+        settingsId == 'platform' &&
+        isAdmin() &&
+        isValidPlatformSettings(incoming()) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(settingsId) &&
+        settingsId == 'platform' &&
+        isAdmin() &&
+        isValidPlatformSettings(incoming()) &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'heroMode', 'heroVideoUrl', 'heroPosterUrl', 'heroImageUrl',
+          'heroHeadline', 'heroSubheadline', 'customLogoUrl', 'customNavItems', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // Academy Events & Pinned Poster Board
+    match /events/{eventId} {
+      allow get: if isValidId(eventId) && (
+        (resource != null && existing().isPublished == true) ||
+        isAdmin()
+      );
+      allow list: if resource.data.isPublished == true;
+      allow create: if isValidId(eventId) &&
+        isAdmin() &&
+        isValidAcademyEvent(incoming(), eventId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(eventId) &&
+        isAdmin() &&
+        isValidAcademyEvent(incoming(), eventId) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'description', 'posterUrl', 'courseId', 'courseTitle',
+          'startUtc', 'endUtc', 'dateStr', 'dayOfWeek', 'timeUtc',
+          'instructorId', 'instructorName', 'meetingId', 'meetingPasscode',
+          'joinUrl', 'hostStartUrl', 'isLiveNow', 'autoRecord',
+          'type', 'pinnedToBoard', 'pinColor',
+          'locationOrLabel', 'isPublished', 'updatedAt'
+        ]);
+      allow delete: if isValidId(eventId) && isAdmin();
+    }
+  }
+}

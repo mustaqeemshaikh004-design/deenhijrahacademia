@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#08182E" />
+      <stop offset="55%" stop-color="#0B2340" />
+      <stop offset="100%" stop-color="#071120" />
+    </linearGradient>
+    <linearGradient id="aqua" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE" />
+      <stop offset="55%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A" />
+      <stop offset="50%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="112" height="112" rx="28" fill="url(#bg)" stroke="url(#aqua)" stroke-width="3" />
+  <rect x="27" y="27" width="66" height="66" rx="10" fill="none" stroke="url(#aqua)" stroke-width="3" />
+  <rect x="27" y="27" width="66" height="66" rx="10" fill="none" stroke="url(#aqua)" stroke-width="2.6" transform="rotate(45 60 60)" />
+  <path d="M 38 82 L 38 56 C 38 41, 49 32, 60 25 C 71 32, 82 41, 82 56 L 82 82 Z" fill="#071120" fill-opacity="0.72" stroke="url(#gold)" stroke-width="2.2" stroke-linejoin="round" />
+  <polygon points="60,29 61.8,33.5 66.5,33.5 62.7,36.2 64.1,40.7 60,38 55.9,40.7 57.3,36.2 53.5,33.5 58.2,33.5" fill="#FDE68A" />
+  <path d="M 60 76 C 53 72, 46 72, 41 74.5 L 41 59.5 C 46 57.2, 53 57.5, 60 61.5 Z" fill="#FFFFFF" />
+  <path d="M 60 76 C 67 72, 74 72, 79 74.5 L 79 59.5 C 74 57.2, 67 57.5, 60 61.5 Z" fill="#E0F2FE" />
+  <circle cx="60" cy="54.5" r="2.8" fill="#00F2FE" />
+</svg>

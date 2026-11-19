@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deen Hijrah Academia</title>
+    <script>
+      (function () {
+        try {
+          var savedTheme = localStorage.getItem('dha_theme');
+          if (savedTheme === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <meta name="description" content="Production-grade academy platform customized for administrator Mustaqeem, featuring Seerahverse aesthetics, automated Zoom cloud sync, global timezone auto-clocking, and moderated community hub." />
+    <meta property="og:title" content="Deen Hijrah Academia" />
+    <meta property="og:description" content="Production-grade academy platform customized for administrator Mustaqeem, featuring Seerahverse aesthetics, automated Zoom cloud sync, global timezone auto-clocking, and moderated community hub." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-slate-50 dark:bg-[#071120] text-slate-900 dark:text-slate-100 antialiased selection:bg-[#0284C7]/20 dark:selection:bg-[#00F2FE]/20 selection:text-[#0284C7] dark:selection:text-[#00F2FE] overflow-x-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
