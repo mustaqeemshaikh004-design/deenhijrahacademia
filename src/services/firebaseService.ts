@@ -19,6 +19,7 @@ import {
   getBlob,
   deleteObject,
 } from 'firebase/storage';
+import type { User as FirebaseUser } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
   db,
@@ -307,6 +308,119 @@ export function isFirebaseChancellorSignedIn(): boolean {
       auth.currentUser.emailVerified &&
       auth.currentUser.email?.toLowerCase() === CHANCELLOR_EMAIL
   );
+}
+
+export interface ParsedApiResponse<T = Record<string, unknown>> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  isJson: boolean;
+  errorMessage: string;
+}
+
+export async function parseApiJsonResponse<T = Record<string, unknown>>(
+  res: Response,
+  fallbackError = 'Unable to reach the academy server.'
+): Promise<ParsedApiResponse<T>> {
+  let rawText = '';
+  try {
+    rawText = await res.text();
+  } catch {
+    return {
+      ok: false,
+      status: res.status,
+      data: null,
+      isJson: false,
+      errorMessage: fallbackError,
+    };
+  }
+
+  const trimmed = rawText.trim();
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const looksLikeJson =
+    trimmed.startsWith('{') || trimmed.startsWith('[') || contentType.includes('application/json');
+
+  if (trimmed && looksLikeJson) {
+    try {
+      const parsed = JSON.parse(trimmed) as T & { error?: string; message?: string };
+      const errMsg =
+        typeof parsed?.error === 'string' && parsed.error
+          ? parsed.error
+          : typeof parsed?.message === 'string' && !res.ok
+          ? parsed.message
+          : res.ok
+          ? ''
+          : `${fallbackError} (HTTP ${res.status})`;
+      return {
+        ok: res.ok,
+        status: res.status,
+        data: parsed,
+        isJson: true,
+        errorMessage: errMsg,
+      };
+    } catch {
+      // Fall through to non-JSON handling
+    }
+  }
+
+  const isHtmlOrNotFound =
+    res.status === 404 ||
+    trimmed.toLowerCase().startsWith('<!doctype') ||
+    trimmed.toLowerCase().startsWith('<html') ||
+    trimmed.toLowerCase().includes('page could not be found');
+
+  return {
+    ok: false,
+    status: res.status,
+    data: null,
+    isJson: false,
+    errorMessage: isHtmlOrNotFound
+      ? 'The backend service route is currently unavailable on this host. You can still sign in directly with Google (Firebase) below.'
+      : fallbackError,
+  };
+}
+
+export function buildVerifiedUserFromFirebase(
+  fbUser: FirebaseUser,
+  preferredRole?: 'student' | 'teacher'
+): User {
+  const email = (fbUser.email || '').trim().toLowerCase();
+  const isChancellor = Boolean(fbUser.emailVerified && email === CHANCELLOR_EMAIL);
+  const cached = getStoredCachedUser();
+  const cachedSameUser =
+    cached &&
+    (cached.id === fbUser.uid || (email && cached.email?.toLowerCase() === email))
+      ? cached
+      : null;
+
+  const displayName = (fbUser.displayName || 'Scholar User').trim();
+  const parts = displayName.split(/\s+/).filter(Boolean);
+  const firstName = parts[0] || cachedSameUser?.firstName || 'Scholar';
+  const lastName = parts.slice(1).join(' ') || cachedSameUser?.lastName || 'User';
+
+  const role: User['role'] = isChancellor
+    ? 'admin'
+    : preferredRole === 'teacher'
+    ? 'teacher'
+    : cachedSameUser?.role && cachedSameUser.role !== 'admin'
+    ? cachedSameUser.role
+    : 'student';
+
+  return {
+    id: fbUser.uid,
+    firstName,
+    lastName,
+    email: email || `${fbUser.uid}@deenhijrahacademia.edu`,
+    role,
+    gender: cachedSameUser?.gender === 'female' ? 'female' : 'male',
+    avatarUrl: fbUser.photoURL || cachedSameUser?.avatarUrl,
+    avatarStoragePath: cachedSameUser?.avatarStoragePath,
+    timezone: cachedSameUser?.timezone,
+    preferredTheme: cachedSameUser?.preferredTheme,
+    readNotificationIds: cachedSameUser?.readNotificationIds,
+    createdAt: cachedSameUser?.createdAt || new Date().toISOString(),
+    lastActive: new Date().toISOString(),
+  };
 }
 
 // ==================== FIRESTORE USER & ROLE SYNC ====================

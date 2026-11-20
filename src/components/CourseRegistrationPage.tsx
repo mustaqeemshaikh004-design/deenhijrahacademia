@@ -26,7 +26,9 @@ import { formatToLocalTime } from '../utils/timezone';
 import { BrandLogo } from './BrandLogo';
 import { auth, googleProvider, signInWithPopup } from '../firebase';
 import {
+  buildVerifiedUserFromFirebase,
   formatFirebaseAuthError,
+  parseApiJsonResponse,
   setStoredCachedUser,
   setStoredSessionToken,
   syncUserProfileToFirestore,
@@ -185,43 +187,58 @@ export const CourseRegistrationPage: React.FC<CourseRegistrationPageProps> = ({
       const last = rest.join(' ') || 'User';
       const idToken = await fbUser.getIdToken();
 
-      const res = await fetch('/api/auth/google-callback', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          uid: fbUser.uid,
-          email: fbUser.email || '',
-          firstName: first,
-          lastName: last,
-          avatarUrl: fbUser.photoURL || undefined,
-          requestedRole: 'student',
-        }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error || 'Could not authenticate with Google.');
+      let syncedUser: User | null = null;
+      let sessionToken = '';
+      let adminSessionToken = '';
+
+      try {
+        const res = await fetch('/api/auth/google-callback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            uid: fbUser.uid,
+            email: fbUser.email || '',
+            firstName: first,
+            lastName: last,
+            avatarUrl: fbUser.photoURL || undefined,
+            requestedRole: 'student',
+          }),
+        });
+        const parsed = await parseApiJsonResponse<{
+          user?: User;
+          sessionToken?: string;
+          adminSessionToken?: string;
+        }>(res, 'Could not authenticate with Google.');
+        if (parsed.ok && parsed.data?.user) {
+          syncedUser = parsed.data.user;
+          sessionToken = parsed.data.sessionToken || '';
+          adminSessionToken = parsed.data.adminSessionToken || '';
+        }
+      } catch {
+        // Fallback to verified Firebase user below
       }
-      const data = await res.json();
+
+      const resolvedUser = syncedUser || buildVerifiedUserFromFirebase(fbUser, 'student');
       await Promise.allSettled([
         syncUserProfileToFirestore({
-          ...data.user,
+          ...resolvedUser,
           id: fbUser.uid,
-          email: fbUser.email || data.user.email,
-          avatarUrl: fbUser.photoURL || data.user.avatarUrl,
+          email: fbUser.email || resolvedUser.email,
+          avatarUrl: fbUser.photoURL || resolvedUser.avatarUrl,
         }),
       ]);
-      const sessionToken = data.sessionToken || data.adminSessionToken || '';
-      if (sessionToken) setStoredSessionToken(sessionToken);
-      setStoredCachedUser(data.user);
+      const activeToken = adminSessionToken || sessionToken;
+      if (activeToken) setStoredSessionToken(activeToken);
+      setStoredCachedUser(resolvedUser);
       if (onAuthenticated) {
-        onAuthenticated(data.user, data.adminSessionToken || sessionToken);
+        onAuthenticated(resolvedUser, activeToken);
       }
-      setFullName(`${data.user.firstName} ${data.user.lastName}`.trim());
-      setEmail(data.user.email || '');
+      setFullName(`${resolvedUser.firstName} ${resolvedUser.lastName}`.trim());
+      setEmail(resolvedUser.email || '');
     } catch (err: any) {
       setErrorMsg(
         formatFirebaseAuthError(err, 'Google authentication could not be completed.')

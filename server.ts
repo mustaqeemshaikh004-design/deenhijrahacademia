@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -85,7 +85,7 @@ import {
   verifyRecordingAccessInSql,
 } from './src/db/repository.ts';
 import { adminAuth } from './src/lib/firebase-admin.ts';
-import { optionalAuth, requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import { optionalAuth, requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 
 dotenv.config();
 
@@ -5095,6 +5095,11 @@ Respond with deep academic clarity, respectful Islamic etiquette (e.g. including
   res.json({
     answer: `Regarding your inquiry on "${courseTitle}": In traditional scholarship, understanding this concept requires examining its linguistic roots, classical commentaries, and ethical applications. Review Module 1 and Module 2 notes for the foundational principles, or ask during the upcoming Saturday live cohort Q&A.`
   });
+});
+
+// Ensure unknown /api/* routes always return JSON instead of SPA HTML/text
+app.all('/api/*', (_req: Request, res: Response) => {
+  res.status(404).json({ error: 'API endpoint not found.' });
 });
 
 // Setup Vite dev middleware or serve static in production

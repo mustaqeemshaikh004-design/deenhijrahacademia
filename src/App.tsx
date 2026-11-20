@@ -94,6 +94,8 @@ import {
   SESSION_STORAGE_KEY,
   CACHED_USER_KEY,
   getAuthHeaders,
+  parseApiJsonResponse,
+  buildVerifiedUserFromFirebase,
 } from './services/firebaseService';
 
 const BUILT_IN_TABS = new Set([
@@ -302,16 +304,18 @@ function updateBrowserUrl(
   }
 }
 
+async function parseJsonIfOk<T>(res: Response | null | undefined): Promise<T | null> {
+  if (!res || !res.ok) return null;
+  const parsed = await parseApiJsonResponse<T>(res);
+  return parsed.ok && parsed.isJson ? parsed.data : null;
+}
+
 async function readApiError(res: Response, fallback: string): Promise<string> {
-  try {
-    const data = await res.json();
-    if (data?.error && typeof data.error === 'string') {
-      return data.error;
-    }
-  } catch {
-    // Response is not JSON
+  const parsed = await parseApiJsonResponse<{ error?: string }>(res, fallback);
+  if (parsed.data?.error && typeof parsed.data.error === 'string') {
+    return parsed.data.error;
   }
-  return `${fallback} (HTTP ${res.status})`;
+  return parsed.errorMessage || `${fallback} (HTTP ${res.status})`;
 }
 
 export default function App() {
@@ -587,14 +591,39 @@ export default function App() {
         isAdminViewer ? fetch('/api/admin/moderation-logs', { headers }) : Promise.resolve(null),
       ]);
 
-      if (coursesRes.ok) setCourses(await coursesRes.json());
-      if (usersRes && usersRes.ok) {
-        const uList: User[] = await usersRes.json();
-        setUsers(uList);
+      const [
+        coursesData,
+        usersData,
+        postsData,
+        chatData,
+        modData,
+        calData,
+        blogData,
+        facultyData,
+        courseRevData,
+        instructorRevData,
+        loadedSettings,
+      ] = await Promise.all([
+        parseJsonIfOk<Course[]>(coursesRes),
+        isAdminViewer ? parseJsonIfOk<User[]>(usersRes) : Promise.resolve(null),
+        parseJsonIfOk<CommunityPost[]>(postsRes),
+        parseJsonIfOk<ChatMessage[]>(chatRes),
+        isAdminViewer ? parseJsonIfOk<ModerationLog[]>(modRes) : Promise.resolve(null),
+        parseJsonIfOk<CalendarEvent[]>(calRes),
+        parseJsonIfOk<BlogPost[]>(blogRes),
+        parseJsonIfOk<FacultyProfile[]>(facultyRes),
+        parseJsonIfOk<CourseReview[]>(courseRevRes),
+        parseJsonIfOk<InstructorReview[]>(instructorRevRes),
+        parseJsonIfOk<PlatformSettings>(settingsRes),
+      ]);
+
+      if (Array.isArray(coursesData)) setCourses(coursesData);
+      if (Array.isArray(usersData)) {
+        setUsers(usersData);
         if (!isTesterModeRef.current) {
           setCurrentUser((prev) => {
             if (!prev) return prev;
-            const fresh = uList.find(
+            const fresh = usersData.find(
               (u) => u.id === prev.id || u.email.toLowerCase() === prev.email.toLowerCase()
             );
             if (
@@ -613,43 +642,40 @@ export default function App() {
       } else if (!isAdminViewer) {
         setUsers([]);
       }
-      if (postsRes.ok) setCommunityPosts(await postsRes.json());
-      if (chatRes.ok) setChatMessages(await chatRes.json());
-      if (modRes && modRes.ok) {
-        setModerationLogs(await modRes.json());
+      if (Array.isArray(postsData)) setCommunityPosts(postsData);
+      if (Array.isArray(chatData)) setChatMessages(chatData);
+      if (Array.isArray(modData)) {
+        setModerationLogs(modData);
       } else if (!isAdminViewer) {
         setModerationLogs([]);
       }
-      if (calRes.ok) setCalendarEvents(await calRes.json());
-      if (blogRes.ok) {
-        setArticles(await blogRes.json());
+      if (Array.isArray(calData)) setCalendarEvents(calData);
+      if (Array.isArray(blogData)) {
+        setArticles(blogData);
       }
       setArticlesLoaded(true);
-      if (facultyRes.ok) {
-        setFacultyProfiles(await facultyRes.json());
+      if (Array.isArray(facultyData)) {
+        setFacultyProfiles(facultyData);
       }
-      if (courseRevRes.ok) {
-        const serverCourseRevs: CourseReview[] = await courseRevRes.json();
+      if (Array.isArray(courseRevData)) {
         setCourseReviews((prev) => {
           const byId = new Map(prev.map((r) => [r.id, r]));
-          serverCourseRevs.forEach((r) => byId.set(r.id, r));
+          courseRevData.forEach((r) => byId.set(r.id, r));
           return Array.from(byId.values()).sort(
             (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
           );
         });
       }
-      if (instructorRevRes.ok) {
-        const serverInstrRevs: InstructorReview[] = await instructorRevRes.json();
+      if (Array.isArray(instructorRevData)) {
         setInstructorReviews((prev) => {
           const byId = new Map(prev.map((r) => [r.id, r]));
-          serverInstrRevs.forEach((r) => byId.set(r.id, r));
+          instructorRevData.forEach((r) => byId.set(r.id, r));
           return Array.from(byId.values()).sort(
             (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
           );
         });
       }
-      if (settingsRes.ok) {
-        const loadedSettings: PlatformSettings = await settingsRes.json();
+      if (loadedSettings && typeof loadedSettings === 'object') {
         const rawVideo = loadedSettings.heroVideoUrl || '';
         const sanitizedVideo =
           rawVideo.includes('mixkit.co') ||
@@ -678,9 +704,16 @@ export default function App() {
           credentials: 'include',
           headers,
         });
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.authenticated && data?.user) {
+        const parsed = await parseApiJsonResponse<{
+          authenticated?: boolean;
+          user?: User;
+          adminSessionToken?: string;
+          sessionToken?: string;
+          isAdmin?: boolean;
+        }>(res);
+        if (parsed.ok && parsed.isJson && parsed.data) {
+          const data = parsed.data;
+          if (data.authenticated && data.user) {
             setCurrentUser(data.user);
             setStoredCachedUser(data.user);
             if (data.user.timezone) {
@@ -799,6 +832,8 @@ export default function App() {
     }
 
     (async () => {
+      let syncedUser: User | null = null;
+      let syncedToken = '';
       try {
         const idToken = await firebaseUser.getIdToken();
         const sqlRes = await fetch('/api/auth/google-callback', {
@@ -814,36 +849,44 @@ export default function App() {
             avatarUrl: firebaseUser.photoURL || undefined,
           }),
         });
-        if (!active || !sqlRes.ok) return;
-        const sqlData = await sqlRes.json();
-        const token = sqlData?.adminSessionToken || sqlData?.sessionToken;
-        if (token) {
-          setStoredSessionToken(token);
-        }
-        if (sqlData?.user) {
-          setCurrentUser(sqlData.user);
-          setStoredCachedUser(sqlData.user);
-          if (sqlData.user.timezone) {
-            setSavedTimezonePreference(sqlData.user.timezone);
-          }
-          if (
-            sqlData.user.preferredTheme === 'dark' ||
-            sqlData.user.preferredTheme === 'light'
-          ) {
-            setTheme(sqlData.user.preferredTheme);
-          }
-          if (sqlData.user.role === 'admin') {
-            setSavedAdminUser(sqlData.user);
-            setAdminSessionToken(token || null);
-          } else {
-            setSavedAdminUser(null);
-            setAdminSessionToken(null);
-          }
-          void fetchData(sqlData.user);
+        if (!active) return;
+        const parsed = await parseApiJsonResponse<{
+          user?: User;
+          adminSessionToken?: string;
+          sessionToken?: string;
+        }>(sqlRes);
+        if (parsed.ok && parsed.isJson && parsed.data?.user) {
+          syncedUser = parsed.data.user;
+          syncedToken = parsed.data.adminSessionToken || parsed.data.sessionToken || '';
         }
       } catch (err) {
-        console.error('Firebase session sync warning:', err);
+        console.warn('Firebase backend sync fallback active:', err);
       }
+
+      if (!active) return;
+      const finalUser = syncedUser || buildVerifiedUserFromFirebase(firebaseUser);
+      if (syncedToken) {
+        setStoredSessionToken(syncedToken);
+      }
+      setCurrentUser(finalUser);
+      setStoredCachedUser(finalUser);
+      if (finalUser.timezone) {
+        setSavedTimezonePreference(finalUser.timezone);
+      }
+      if (
+        finalUser.preferredTheme === 'dark' ||
+        finalUser.preferredTheme === 'light'
+      ) {
+        setTheme(finalUser.preferredTheme);
+      }
+      if (finalUser.role === 'admin') {
+        setSavedAdminUser(finalUser);
+        setAdminSessionToken(syncedToken || null);
+      } else {
+        setSavedAdminUser(null);
+        setAdminSessionToken(null);
+      }
+      void fetchData(finalUser);
     })();
 
     return () => {

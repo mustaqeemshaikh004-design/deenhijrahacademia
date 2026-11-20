@@ -29,6 +29,8 @@ import {
   setStoredSessionToken,
   setStoredCachedUser,
   formatFirebaseAuthError,
+  parseApiJsonResponse,
+  buildVerifiedUserFromFirebase,
 } from '../services/firebaseService';
 import { setSavedTimezonePreference, getSavedTimezonePreference } from '../utils/timezone';
 
@@ -178,21 +180,29 @@ export const AuthView: React.FC<AuthViewProps> = ({
           password: signInPassword,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.user) {
-        throw new Error(data.error || 'Invalid email or password.');
+      const parsed = await parseApiJsonResponse<{
+        user?: User;
+        sessionToken?: string;
+        adminSessionToken?: string;
+        error?: string;
+      }>(res, 'Invalid email or password.');
+
+      if (!parsed.ok || !parsed.data?.user) {
+        throw new Error(parsed.errorMessage || 'Invalid email or password.');
       }
 
+      const data = parsed.data;
+      const authedUser = parsed.data.user;
       const sessionToken = data.sessionToken || data.adminSessionToken || '';
       if (sessionToken) {
         setStoredSessionToken(sessionToken);
       }
-      setStoredCachedUser(data.user);
-      if (data.user.timezone) {
-        setSavedTimezonePreference(data.user.timezone);
+      setStoredCachedUser(authedUser);
+      if (authedUser.timezone) {
+        setSavedTimezonePreference(authedUser.timezone);
       }
-      setSuccessNotice(`Welcome back, ${data.user.firstName}! Timezone Clock Activated.`);
-      setTimeout(() => routeAfterAuth(data.user, data.adminSessionToken || sessionToken), 350);
+      setSuccessNotice(`Welcome back, ${authedUser.firstName}! Timezone Clock Activated.`);
+      setTimeout(() => routeAfterAuth(authedUser, data.adminSessionToken || sessionToken), 350);
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication failed. Please check your credentials.');
     } finally {
@@ -237,10 +247,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
           newPassword: resetNewPassword.trim(),
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || 'Unable to reset password.');
+      const parsed = await parseApiJsonResponse<{ message?: string; error?: string }>(
+        res,
+        'Unable to reset password.'
+      );
+      if (!parsed.ok) {
+        throw new Error(parsed.errorMessage || 'Unable to reset password.');
       }
+      const data = parsed.data || {};
       setSignInEmail(emailTarget);
       setSignInPassword('');
       setResetCurrentPassword('');
@@ -307,49 +321,76 @@ export const AuthView: React.FC<AuthViewProps> = ({
         explicitRequestedRole ||
         (mode === 'signup' ? (signupPath === 'instructor' ? 'teacher' : 'student') : undefined);
 
-      const res = await fetch('/api/auth/google-callback', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          uid: fbUser.uid,
-          email,
-          firstName: first,
-          lastName: last,
-          avatarUrl: fbUser.photoURL || undefined,
-          ...(resolvedRequestedRole ? { requestedRole: resolvedRequestedRole } : {}),
-        }),
-      });
+      let authenticatedUser: User | null = null;
+      let sessionToken = '';
+      let adminSessionToken = '';
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(
-          errData?.error || 'Could not complete Google session synchronization.'
-        );
+      try {
+        const res = await fetch('/api/auth/google-callback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            uid: fbUser.uid,
+            email,
+            firstName: first,
+            lastName: last,
+            avatarUrl: fbUser.photoURL || undefined,
+            ...(resolvedRequestedRole ? { requestedRole: resolvedRequestedRole } : {}),
+          }),
+        });
+
+        const parsed = await parseApiJsonResponse<{
+          user?: User;
+          sessionToken?: string;
+          adminSessionToken?: string;
+        }>(res, 'Could not complete Google session synchronization.');
+
+        if (parsed.ok && parsed.data?.user) {
+          authenticatedUser = parsed.data.user;
+          sessionToken = parsed.data.sessionToken || '';
+          adminSessionToken = parsed.data.adminSessionToken || '';
+        } else if (parsed.isJson && parsed.status >= 400 && parsed.status < 500 && parsed.status !== 404) {
+          throw new Error(parsed.errorMessage || 'Google authentication was rejected by the server.');
+        }
+      } catch (backendErr) {
+        // Re-throw explicit 4xx JSON auth rejections; otherwise allow verified Firebase session to complete
+        if (
+          backendErr instanceof Error &&
+          backendErr.message.includes('rejected by the server')
+        ) {
+          throw backendErr;
+        }
       }
 
-      const data = await res.json();
+      const resolvedUser =
+        authenticatedUser ||
+        buildVerifiedUserFromFirebase(
+          fbUser,
+          resolvedRequestedRole
+        );
+
       await Promise.allSettled([
         syncUserProfileToFirestore({
-          ...data.user,
+          ...resolvedUser,
           id: fbUser.uid,
-          email: fbUser.email || data.user.email,
-          avatarUrl: fbUser.photoURL || data.user.avatarUrl,
+          email: fbUser.email || resolvedUser.email,
+          avatarUrl: fbUser.photoURL || resolvedUser.avatarUrl,
         }),
       ]);
 
-      const sessionToken = data.sessionToken || data.adminSessionToken || '';
-      if (sessionToken) {
-        setStoredSessionToken(sessionToken);
+      const activeToken = adminSessionToken || sessionToken;
+      if (activeToken) {
+        setStoredSessionToken(activeToken);
       }
-      setStoredCachedUser(data.user);
+      setStoredCachedUser(resolvedUser);
       setSuccessNotice(
-        `Signed in with Google! Welcome, ${data.user.firstName}. Global Clock Activated.`
+        `Signed in with Google! Welcome, ${resolvedUser.firstName}. Global Clock Activated.`
       );
-      setTimeout(() => routeAfterAuth(data.user, data.adminSessionToken || sessionToken), 350);
+      setTimeout(() => routeAfterAuth(resolvedUser, activeToken), 350);
     } catch (err: any) {
       console.error('Google sign in error:', err);
       setErrorMsg(
@@ -419,22 +460,30 @@ export const AuthView: React.FC<AuthViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Registration failed');
+      const parsed = await parseApiJsonResponse<{
+        user?: User;
+        sessionToken?: string;
+        error?: string;
+      }>(res, 'Registration failed');
+      if (!parsed.ok || !parsed.data?.user) {
+        throw new Error(parsed.errorMessage || 'Registration failed');
+      }
+      const data = parsed.data;
+      const createdUser = parsed.data.user;
 
       if (data.sessionToken) {
         setStoredSessionToken(data.sessionToken);
       }
-      setStoredCachedUser(data.user);
+      setStoredCachedUser(createdUser);
       if (timezonePref) {
         setSavedTimezonePreference(timezonePref);
       }
       setSuccessNotice(
         isInstructor
-          ? `Instructor account activated (${data.user.email}). Entering Faculty Portal...`
-          : `Student account created (${data.user.email}). Welcome, ${data.user.firstName}!`
+          ? `Instructor account activated (${createdUser.email}). Entering Faculty Portal...`
+          : `Student account created (${createdUser.email}). Welcome, ${createdUser.firstName}!`
       );
-      setTimeout(() => routeAfterAuth(data.user, data.sessionToken), 400);
+      setTimeout(() => routeAfterAuth(createdUser, data.sessionToken), 400);
     } catch (err: any) {
       setErrorMsg(err.message || 'Registration error.');
     } finally {
