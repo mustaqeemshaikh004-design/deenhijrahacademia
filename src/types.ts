@@ -12,6 +12,7 @@ export interface User {
   avatarStoragePath?: string;
   timezone?: string;
   preferredTheme?: 'dark' | 'light';
+  readNotificationIds?: string[];
   hasCustomPassword?: boolean;
   createdAt: string;
   lastActive?: string;
@@ -327,3 +328,68 @@ export interface StudentSubjectProgress {
   quizScores: { quizTitle: string; score: number; max: number; date: string }[];
   overallGradePercent: number;
 }
+
+export interface InAppNotification {
+  id: string;
+  type: 'recording' | 'pinned_event';
+  title: string;
+  subtitle: string;
+  timestamp: string;
+  courseId?: string;
+  recordingId?: string;
+  eventId?: string;
+  read: boolean;
+}
+
+export interface FacultyProfile {
+  id: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  title: string;
+  roleLabel: string;
+  specialty: string;
+  bio: string;
+  qualifications: string[];
+  email?: string;
+  gender: UserGender;
+  avatarUrl?: string;
+  isVerifiedDirector?: boolean;
+  coursesTaughtCount?: number;
+  averageRating?: number;
+  reviewCount?: number;
+}
+
+export interface CourseReview {
+  id: string;
+  courseId: string;
+  authorId: string;
+  authorName: string;
+  authorGender: UserGender;
+  authorAvatar?: string;
+  rating: number;
+  comment: string;
+  isVerifiedEnrollment: boolean;
+  isPublished: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstructorReview {
+  id: string;
+  instructorId: string;
+  instructorName: string;
+  authorId: string;
+  authorName: string;
+  authorGender: UserGender;
+  authorAvatar?: string;
+  courseId?: string;
+  courseTitle?: string;
+  rating: number;
+  comment: string;
+  isVerifiedStudent: boolean;
+  isPublished: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+

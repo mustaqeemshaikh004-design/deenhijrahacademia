@@ -17,7 +17,10 @@ import type {
   BlogPost,
   CalendarEvent,
   AcademicAssessment,
-  StudentSubjectProgress
+  StudentSubjectProgress,
+  FacultyProfile,
+  CourseReview,
+  InstructorReview
 } from './src/types.ts';
 import { resolveCourseAssessmentById } from './src/utils/moduleQuizHelper.ts';
 import { isCloudSqlConfigured } from './src/db/index.ts';
@@ -1615,6 +1618,66 @@ app.patch('/api/users/:id/theme', async (req: Request, res: Response) => {
   }
 });
 
+app.patch('/api/users/:id/notifications/read', async (req: Request, res: Response) => {
+  try {
+    const actor = await resolveRequestActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Sign in required to save notification read state.' });
+    }
+
+    const { readNotificationIds, email } = req.body || {};
+    const targetEmail = String(email || '').trim().toLowerCase();
+    const isSelf =
+      actor.user.id === req.params.id ||
+      (targetEmail && actor.user.email.toLowerCase() === targetEmail);
+    if (!actor.isAdmin && !isSelf) {
+      return res.status(403).json({ error: 'You can only update your own notification status.' });
+    }
+
+    if (!Array.isArray(readNotificationIds)) {
+      return res.status(400).json({ error: 'readNotificationIds must be an array.' });
+    }
+
+    const cleanIds: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of readNotificationIds) {
+      if (typeof raw !== 'string') continue;
+      const trimmed = raw.trim().slice(0, 256);
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      cleanIds.push(trimmed);
+    }
+    const boundedIds = cleanIds.slice(-100);
+
+    const targetUid = actor.isAdmin ? req.params.id : actor.user.id;
+    await saveStoredReadNotificationIds(targetUid, boundedIds);
+
+    if (!isCloudSqlConfigured()) {
+      const localUser = db.users.find(
+        (u) =>
+          u.id === targetUid ||
+          u.id === req.params.id ||
+          (targetEmail && u.email.toLowerCase() === targetEmail)
+      );
+      if (localUser) {
+        localUser.readNotificationIds = boundedIds;
+        localUser.lastActive = new Date().toISOString();
+        saveDb(db);
+      }
+    }
+
+    syncMemorySessionsUserPatch(targetUid, { readNotificationIds: boundedIds });
+    const updatedUser: User = {
+      ...(actor.user.id === targetUid ? actor.user : { ...actor.user, id: targetUid }),
+      readNotificationIds: boundedIds,
+    };
+    return res.json(updatedUser);
+  } catch (error: any) {
+    console.error('Failed to update read notifications:', error);
+    res.status(500).json({ error: error.message || 'Failed to save notification state' });
+  }
+});
+
 app.delete('/api/users/:id', async (req: Request, res: Response) => {
   try {
     const actor = await requireAdminActor(req, res);
@@ -2666,13 +2729,489 @@ async function saveStoredThemePreference(userId: string, theme: 'dark' | 'light'
   );
 }
 
-async function attachPreferredTheme(user: User): Promise<User> {
-  const saved = await getStoredThemePreference(user.id);
-  if (saved) {
-    return { ...user, preferredTheme: saved };
+async function getStoredReadNotificationIds(userId: string): Promise<string[] | undefined> {
+  const safeId = `notif_reads_${String(userId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  try {
+    if (isCloudSqlConfigured()) {
+      const asset = await getUploadedAssetFromSql(safeId);
+      if (!asset?.dataBase64) return undefined;
+      const parsed = JSON.parse(Buffer.from(asset.dataBase64, 'base64').toString('utf-8'));
+      if (Array.isArray(parsed?.readNotificationIds)) {
+        return parsed.readNotificationIds
+          .filter((x: unknown): x is string => typeof x === 'string')
+          .slice(-100);
+      }
+      return undefined;
+    }
+    const localUser = db.users.find((u) => u.id === userId);
+    if (Array.isArray(localUser?.readNotificationIds)) {
+      return localUser.readNotificationIds.slice(-100);
+    }
+    const readFile = path.join(UPLOADS_DIR, `${safeId}.json`);
+    if (fs.existsSync(readFile)) {
+      const parsed = JSON.parse(await fs.promises.readFile(readFile, 'utf-8'));
+      if (Array.isArray(parsed?.readNotificationIds)) {
+        return parsed.readNotificationIds
+          .filter((x: unknown): x is string => typeof x === 'string')
+          .slice(-100);
+      }
+    }
+  } catch {
+    return undefined;
   }
-  return user;
+  return undefined;
 }
+
+async function saveStoredReadNotificationIds(userId: string, readIds: string[]): Promise<void> {
+  const safeId = `notif_reads_${String(userId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const payload = { userId, readNotificationIds: readIds.slice(-100), updatedAt: new Date().toISOString() };
+  if (isCloudSqlConfigured()) {
+    const encoded = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64');
+    await createUploadedAssetInSql({
+      id: safeId,
+      kind: 'user_notification_reads',
+      mimeType: 'application/json',
+      fileName: `${safeId}.json`,
+      sizeBytes: Buffer.byteLength(encoded),
+      dataBase64: encoded,
+    });
+    return;
+  }
+  await fs.promises.writeFile(
+    path.join(UPLOADS_DIR, `${safeId}.json`),
+    JSON.stringify(payload, null, 2),
+    'utf-8'
+  );
+}
+
+async function attachPreferredTheme(user: User): Promise<User> {
+  const [savedTheme, savedReadIds] = await Promise.all([
+    getStoredThemePreference(user.id),
+    getStoredReadNotificationIds(user.id),
+  ]);
+  return {
+    ...user,
+    ...(savedTheme ? { preferredTheme: savedTheme } : {}),
+    ...(savedReadIds ? { readNotificationIds: savedReadIds } : {}),
+  };
+}
+
+function sanitizeReviewIdPart(raw: string): string {
+  const cleaned = String(raw || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
+  return cleaned || `id-${Date.now()}`;
+}
+
+async function readStoredJsonList<T>(assetId: string): Promise<T[]> {
+  try {
+    if (isCloudSqlConfigured()) {
+      const asset = await getUploadedAssetFromSql(assetId);
+      if (!asset?.dataBase64) return [];
+      const parsed = JSON.parse(Buffer.from(asset.dataBase64, 'base64').toString('utf-8'));
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    }
+    const localFile = path.join(UPLOADS_DIR, `${assetId}.json`);
+    if (fs.existsSync(localFile)) {
+      const parsed = JSON.parse(await fs.promises.readFile(localFile, 'utf-8'));
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    }
+  } catch (err) {
+    console.warn(`Failed reading ${assetId}:`, err);
+  }
+  return [];
+}
+
+async function writeStoredJsonList<T>(assetId: string, kind: string, items: T[]): Promise<void> {
+  if (isCloudSqlConfigured()) {
+    const encoded = Buffer.from(JSON.stringify(items), 'utf-8').toString('base64');
+    await createUploadedAssetInSql({
+      id: assetId,
+      kind,
+      mimeType: 'application/json',
+      fileName: `${assetId}.json`,
+      sizeBytes: Buffer.byteLength(encoded),
+      dataBase64: encoded,
+    });
+    return;
+  }
+  await fs.promises.writeFile(
+    path.join(UPLOADS_DIR, `${assetId}.json`),
+    JSON.stringify(items, null, 2),
+    'utf-8'
+  );
+}
+
+const COURSE_REVIEWS_ASSET_ID = 'dha_course_reviews_index';
+const INSTRUCTOR_REVIEWS_ASSET_ID = 'dha_instructor_reviews_index';
+
+app.get('/api/faculty', async (_req: Request, res: Response) => {
+  try {
+    const [allUsers, allCourses, instructorReviews] = await Promise.all([
+      isCloudSqlConfigured()
+        ? (await ensureInitialSqlBootstrap(), await getUsersFromSql())
+        : Promise.resolve(db.users),
+      isCloudSqlConfigured() ? listCoursesFromSql() : Promise.resolve(db.courses),
+      readStoredJsonList<InstructorReview>(INSTRUCTOR_REVIEWS_ASSET_ID),
+    ]);
+
+    const byId = new Map<string, FacultyProfile>();
+    const directorUser = allUsers.find(
+      (u) => u.role === 'admin' || u.email.toLowerCase() === CHANCELLOR_EMAIL
+    );
+    const directorId = directorUser?.id || 'admin-mustaqeem';
+
+    byId.set(directorId, {
+      id: directorId,
+      firstName: directorUser?.firstName || 'Mustaqeem',
+      lastName: directorUser?.lastName || 'Shaikh',
+      fullName: directorUser
+        ? `${directorUser.firstName} ${directorUser.lastName}`.trim()
+        : 'Mustaqeem Shaikh',
+      title: 'Founding Director',
+      roleLabel: 'Founding Director & Lead Academic Steward',
+      specialty: 'Institutional Architecture, Seerah & Scholastic Oversight',
+      bio: 'Leading curriculum governance, academic admissions, live scholarly instruction, and digital classroom infrastructure for Deen Hijrah Academia. Oversees cohort design, classical text pedagogy, and assessment standards across all academy tracks.',
+      qualifications: [
+        'Founding Director & Academic Chancellor — Deen Hijrah Academia',
+        'Curriculum Architect for Seerah & Classical Studies',
+        'Verified Lead Scholarly Instructor',
+      ],
+      email: 'faculty.director@deenhijrahacademia.edu',
+      gender: directorUser?.gender === 'female' ? 'female' : 'male',
+      avatarUrl: directorUser?.avatarUrl,
+      isVerifiedDirector: true,
+      coursesTaughtCount: 0,
+      averageRating: 0,
+      reviewCount: 0,
+    });
+
+    for (const u of allUsers) {
+      if (u.role !== 'teacher' && u.role !== 'admin') continue;
+      if (byId.has(u.id)) continue;
+      const fullName = `${u.firstName} ${u.lastName}`.trim() || 'Academy Instructor';
+      const taughtCourses = allCourses.filter(
+        (c) =>
+          c.instructorId === u.id ||
+          c.instructorName.trim().toLowerCase() === fullName.toLowerCase()
+      );
+      const specialtyList = taughtCourses.map((c) => c.title).slice(0, 2);
+      byId.set(u.id, {
+        id: u.id,
+        firstName: u.firstName || fullName.split(' ')[0] || 'Scholar',
+        lastName: u.lastName || fullName.split(' ').slice(1).join(' ') || '',
+        fullName,
+        title: u.role === 'admin' ? 'Academic Steward' : 'Faculty Scholar',
+        roleLabel: u.role === 'admin' ? 'Academic Director & Instructor' : 'Cohort Instructor & Mentor',
+        specialty:
+          specialtyList.length > 0
+            ? specialtyList.join(' · ')
+            : 'Classical Islamic Sciences & Guided Cohort Instruction',
+        bio: `Dedicated academy educator mentoring students in structured live seminars, primary text analysis, and personalized weekly Q&A at Deen Hijrah Academia.`,
+        qualifications: [
+          'Certified Faculty Instructor — Deen Hijrah Academia',
+          'Live Seminar Moderation & Student Assessment Review',
+        ],
+        email: u.email,
+        gender: u.gender === 'female' ? 'female' : 'male',
+        avatarUrl: u.avatarUrl,
+        isVerifiedDirector: u.role === 'admin',
+        coursesTaughtCount: taughtCourses.length,
+        averageRating: 0,
+        reviewCount: 0,
+      });
+    }
+
+    for (const c of allCourses) {
+      const instrId = (c.instructorId || '').trim();
+      const instrName = (c.instructorName || '').trim();
+      if (!instrName) continue;
+      const matched = Array.from(byId.values()).find(
+        (f) =>
+          (instrId && f.id === instrId) ||
+          f.fullName.toLowerCase() === instrName.toLowerCase()
+      );
+      if (!matched) {
+        const key = instrId || `faculty-${sanitizeReviewIdPart(instrName.toLowerCase())}`;
+        const parts = instrName.split(/\s+/);
+        byId.set(key, {
+          id: key,
+          firstName: parts[0] || instrName,
+          lastName: parts.slice(1).join(' '),
+          fullName: instrName,
+          title: 'Course Instructor',
+          roleLabel: 'Visiting / Program Instructor',
+          specialty: c.title,
+          bio: `Course instructor leading structured lessons, weekly study materials, and student cohort discussions for ${c.title}.`,
+          qualifications: [
+            `Lead Instructor — ${c.code || 'Academy Track'}`,
+            'Cohort Assessment & Curriculum Guidance',
+          ],
+          gender: 'male',
+          isVerifiedDirector: false,
+          coursesTaughtCount: 0,
+          averageRating: 0,
+          reviewCount: 0,
+        });
+      }
+    }
+
+    const enriched = Array.from(byId.values()).map((prof) => {
+      const taughtCount = allCourses.filter(
+        (c) =>
+          c.instructorId === prof.id ||
+          c.instructorName.trim().toLowerCase() === prof.fullName.toLowerCase()
+      ).length;
+      const matchingReviews = instructorReviews.filter(
+        (r) =>
+          r.isPublished !== false &&
+          (r.instructorId === prof.id ||
+            r.instructorName.trim().toLowerCase() === prof.fullName.toLowerCase())
+      );
+      const avg =
+        matchingReviews.length > 0
+          ? Number(
+              (
+                matchingReviews.reduce((acc, r) => acc + (Number(r.rating) || 0), 0) /
+                matchingReviews.length
+              ).toFixed(1)
+            )
+          : 0;
+      return {
+        ...prof,
+        coursesTaughtCount: taughtCount,
+        averageRating: avg,
+        reviewCount: matchingReviews.length,
+      };
+    });
+
+    res.json(enriched);
+  } catch (error: any) {
+    console.error('Failed to fetch faculty profiles:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch faculty profiles.' });
+  }
+});
+
+app.get('/api/reviews/courses', async (req: Request, res: Response) => {
+  try {
+    const courseId = typeof req.query.courseId === 'string' ? req.query.courseId.trim() : '';
+    const all = await readStoredJsonList<CourseReview>(COURSE_REVIEWS_ASSET_ID);
+    const visible = all
+      .filter((r) => r.isPublished !== false && (!courseId || r.courseId === courseId))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.json(visible);
+  } catch (error: any) {
+    console.error('Failed to fetch course reviews:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch course reviews.' });
+  }
+});
+
+app.post('/api/courses/:id/reviews', async (req: Request, res: Response) => {
+  try {
+    const actor = await resolveRequestActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Please sign in to submit a course review.' });
+    }
+
+    const courseId = String(req.params.id || '').trim();
+    const course = isCloudSqlConfigured()
+      ? await getCourseByIdFromSql(courseId)
+      : db.courses.find((c) => c.id === courseId);
+    if (!course) {
+      return res.status(404).json({ error: 'Course not found.' });
+    }
+
+    const rawRating = Number(req.body?.rating);
+    const rating = Math.round(rawRating);
+    const comment = String(req.body?.comment || '').trim();
+    if (!Number.isFinite(rawRating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Please select a star rating between 1 and 5.' });
+    }
+    if (!comment || comment.length > 1500) {
+      return res.status(400).json({
+        error: 'Review comment must be between 1 and 1,500 characters.',
+      });
+    }
+
+    const reviewId = `${sanitizeReviewIdPart(course.id)}_${sanitizeReviewIdPart(actor.user.id)}`;
+    const isVerifiedEnrollment =
+      actor.isStaff ||
+      (Array.isArray(course.enrolledStudentIds) &&
+        course.enrolledStudentIds.includes(actor.user.id));
+    const nowIso = new Date().toISOString();
+
+    const existingList = await readStoredJsonList<CourseReview>(COURSE_REVIEWS_ASSET_ID);
+    const existingIdx = existingList.findIndex((r) => r.id === reviewId);
+    const nextReview: CourseReview = {
+      id: reviewId,
+      courseId: course.id,
+      authorId: actor.user.id,
+      authorName: `${actor.user.firstName} ${actor.user.lastName}`.trim() || actor.user.email,
+      authorGender: actor.user.gender === 'female' ? 'female' : 'male',
+      ...(actor.user.avatarUrl ? { authorAvatar: actor.user.avatarUrl } : {}),
+      rating,
+      comment,
+      isVerifiedEnrollment,
+      isPublished: true,
+      createdAt: existingIdx >= 0 ? existingList[existingIdx].createdAt : nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (existingIdx >= 0) {
+      existingList[existingIdx] = nextReview;
+    } else {
+      existingList.unshift(nextReview);
+    }
+    await writeStoredJsonList(COURSE_REVIEWS_ASSET_ID, 'course_reviews_index', existingList);
+    res.status(201).json(nextReview);
+  } catch (error: any) {
+    console.error('Failed to save course review:', error);
+    res.status(500).json({ error: error.message || 'Failed to save course review.' });
+  }
+});
+
+app.delete('/api/courses/:id/reviews/:reviewId', async (req: Request, res: Response) => {
+  try {
+    const actor = await resolveRequestActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const existingList = await readStoredJsonList<CourseReview>(COURSE_REVIEWS_ASSET_ID);
+    const target = existingList.find((r) => r.id === req.params.reviewId && r.courseId === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Review not found.' });
+    }
+    if (target.authorId !== actor.user.id && !actor.isAdmin) {
+      return res.status(403).json({ error: 'You can only delete your own review.' });
+    }
+    const nextList = existingList.filter((r) => r.id !== target.id);
+    await writeStoredJsonList(COURSE_REVIEWS_ASSET_ID, 'course_reviews_index', nextList);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Failed to delete course review:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete course review.' });
+  }
+});
+
+app.get('/api/reviews/instructors', async (req: Request, res: Response) => {
+  try {
+    const instructorId =
+      typeof req.query.instructorId === 'string' ? req.query.instructorId.trim() : '';
+    const all = await readStoredJsonList<InstructorReview>(INSTRUCTOR_REVIEWS_ASSET_ID);
+    const visible = all
+      .filter((r) => r.isPublished !== false && (!instructorId || r.instructorId === instructorId))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.json(visible);
+  } catch (error: any) {
+    console.error('Failed to fetch instructor reviews:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch instructor reviews.' });
+  }
+});
+
+app.post('/api/instructors/:id/reviews', async (req: Request, res: Response) => {
+  try {
+    const actor = await resolveRequestActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Please sign in to submit an instructor review.' });
+    }
+
+    const instructorId = String(req.params.id || '').trim();
+    if (!instructorId) {
+      return res.status(400).json({ error: 'Instructor identifier is required.' });
+    }
+
+    const rawRating = Number(req.body?.rating);
+    const rating = Math.round(rawRating);
+    const comment = String(req.body?.comment || '').trim();
+    const instructorName = String(req.body?.instructorName || '').trim() || 'Academy Instructor';
+    const courseId = typeof req.body?.courseId === 'string' ? req.body.courseId.trim() : '';
+    const courseTitle =
+      typeof req.body?.courseTitle === 'string' ? req.body.courseTitle.trim() : '';
+
+    if (!Number.isFinite(rawRating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Please select a star rating between 1 and 5.' });
+    }
+    if (!comment || comment.length > 1500) {
+      return res.status(400).json({
+        error: 'Instructor review must be between 1 and 1,500 characters.',
+      });
+    }
+
+    const allCourses = isCloudSqlConfigured()
+      ? await listCoursesFromSql()
+      : db.courses;
+    const isVerifiedStudent =
+      actor.isStaff ||
+      allCourses.some(
+        (c) =>
+          (c.instructorId === instructorId ||
+            c.instructorName.trim().toLowerCase() === instructorName.toLowerCase()) &&
+          Array.isArray(c.enrolledStudentIds) &&
+          c.enrolledStudentIds.includes(actor.user.id)
+      );
+
+    const reviewId = `${sanitizeReviewIdPart(instructorId)}_${sanitizeReviewIdPart(actor.user.id)}`;
+    const nowIso = new Date().toISOString();
+
+    const existingList = await readStoredJsonList<InstructorReview>(INSTRUCTOR_REVIEWS_ASSET_ID);
+    const existingIdx = existingList.findIndex((r) => r.id === reviewId);
+    const nextReview: InstructorReview = {
+      id: reviewId,
+      instructorId,
+      instructorName,
+      authorId: actor.user.id,
+      authorName: `${actor.user.firstName} ${actor.user.lastName}`.trim() || actor.user.email,
+      authorGender: actor.user.gender === 'female' ? 'female' : 'male',
+      ...(actor.user.avatarUrl ? { authorAvatar: actor.user.avatarUrl } : {}),
+      ...(courseId ? { courseId } : {}),
+      ...(courseTitle ? { courseTitle } : {}),
+      rating,
+      comment,
+      isVerifiedStudent,
+      isPublished: true,
+      createdAt: existingIdx >= 0 ? existingList[existingIdx].createdAt : nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (existingIdx >= 0) {
+      existingList[existingIdx] = nextReview;
+    } else {
+      existingList.unshift(nextReview);
+    }
+    await writeStoredJsonList(
+      INSTRUCTOR_REVIEWS_ASSET_ID,
+      'instructor_reviews_index',
+      existingList
+    );
+    res.status(201).json(nextReview);
+  } catch (error: any) {
+    console.error('Failed to save instructor review:', error);
+    res.status(500).json({ error: error.message || 'Failed to save instructor review.' });
+  }
+});
+
+app.delete('/api/instructors/:id/reviews/:reviewId', async (req: Request, res: Response) => {
+  try {
+    const actor = await resolveRequestActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const existingList = await readStoredJsonList<InstructorReview>(INSTRUCTOR_REVIEWS_ASSET_ID);
+    const target = existingList.find(
+      (r) => r.id === req.params.reviewId && r.instructorId === req.params.id
+    );
+    if (!target) {
+      return res.status(404).json({ error: 'Instructor review not found.' });
+    }
+    if (target.authorId !== actor.user.id && !actor.isAdmin) {
+      return res.status(403).json({ error: 'You can only delete your own review.' });
+    }
+    const nextList = existingList.filter((r) => r.id !== target.id);
+    await writeStoredJsonList(INSTRUCTOR_REVIEWS_ASSET_ID, 'instructor_reviews_index', nextList);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Failed to delete instructor review:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete instructor review.' });
+  }
+});
 
 app.post('/api/courses/:id/enroll', async (req: Request, res: Response) => {
   try {

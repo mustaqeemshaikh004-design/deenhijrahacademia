@@ -11,8 +11,9 @@ import {
   BookOpen,
   RotateCcw,
 } from 'lucide-react';
-import type { Course } from '../types';
+import type { Course, CourseReview } from '../types';
 import { resolveMediaSrc } from '../assets/fallbacks';
+import { StarRatingDisplay } from './StarRating';
 
 interface CourseCatalogProps {
   courses: Course[];
@@ -22,6 +23,8 @@ interface CourseCatalogProps {
   isAdmin: boolean;
   customLogoUrl?: string;
   onNavigateAuth?: (mode: 'signin' | 'signup') => void;
+  courseReviews?: CourseReview[];
+  onSelectInstructor?: (instructorId: string, instructorName: string) => void;
 }
 
 export const CourseCatalog: React.FC<CourseCatalogProps> = ({
@@ -32,7 +35,15 @@ export const CourseCatalog: React.FC<CourseCatalogProps> = ({
   isAdmin,
   customLogoUrl,
   onNavigateAuth,
+  courseReviews = [],
+  onSelectInstructor,
 }) => {
+  const getCourseRatingSummary = (courseId: string) => {
+    const list = courseReviews.filter((r) => r.courseId === courseId);
+    if (list.length === 0) return null;
+    const avg = list.reduce((sum, r) => sum + (Number(r.rating) || 0), 0) / list.length;
+    return { average: Number(avg.toFixed(1)), count: list.length };
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -264,8 +275,33 @@ export const CourseCatalog: React.FC<CourseCatalogProps> = ({
                 {/* Right 5-col Breakdown */}
                 <div className="lg:col-span-5 p-6 sm:p-8 flex flex-col justify-between gap-5">
                   <div className="space-y-3">
-                    <div className="text-[11px] font-mono text-[#0284C7] dark:text-[#00F2FE] uppercase tracking-wider">
-                      {spotlightCourse.level} Track · Instructor: {spotlightCourse.instructorName}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#0284C7] dark:text-[#00F2FE] uppercase tracking-wider">
+                      <span>
+                        {spotlightCourse.level} Track ·{' '}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectInstructor?.(
+                              spotlightCourse.instructorId,
+                              spotlightCourse.instructorName
+                            );
+                          }}
+                          className="hover:underline font-bold"
+                        >
+                          Instructor: {spotlightCourse.instructorName}
+                        </button>
+                      </span>
+                      {(() => {
+                        const summary = getCourseRatingSummary(spotlightCourse.id);
+                        return summary ? (
+                          <StarRatingDisplay
+                            rating={summary.average}
+                            size="xs"
+                            reviewCount={summary.count}
+                          />
+                        ) : null;
+                      })()}
                     </div>
                     <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white group-hover:text-[#0284C7] dark:group-hover:text-[#00F2FE] transition-colors leading-snug">
                       {spotlightCourse.title}
@@ -444,9 +480,21 @@ export const CourseCatalog: React.FC<CourseCatalogProps> = ({
                       <div>
                         <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400 mb-1">
                           <span>{course.level} Track</span>
-                          <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                            Fee: Free ($0)
-                          </span>
+                          <div className="flex items-center gap-2">
+                            {(() => {
+                              const summary = getCourseRatingSummary(course.id);
+                              return summary ? (
+                                <StarRatingDisplay
+                                  rating={summary.average}
+                                  size="xs"
+                                  reviewCount={summary.count}
+                                />
+                              ) : null;
+                            })()}
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                              Fee: Free ($0)
+                            </span>
+                          </div>
                         </div>
                         <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white group-hover:text-[#0284C7] dark:group-hover:text-[#00F2FE] transition-colors leading-snug line-clamp-2">
                           {course.title}
@@ -491,12 +539,20 @@ export const CourseCatalog: React.FC<CourseCatalogProps> = ({
                       </div>
                     </div>
 
-                    {/* Instructor Footer */}
+                    {/* Clickable Instructor Footer */}
                     <div className="px-5 py-2.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between text-xs">
                       <span className="text-slate-500 dark:text-slate-400">Instructor</span>
-                      <span className="text-slate-800 dark:text-slate-200 font-semibold">
-                        {course.instructorName}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectInstructor?.(course.instructorId, course.instructorName);
+                        }}
+                        className="text-slate-800 dark:text-slate-200 hover:text-[#0284C7] dark:hover:text-[#00F2FE] font-semibold hover:underline inline-flex items-center gap-1"
+                      >
+                        <span>{course.instructorName}</span>
+                        <ArrowUpRight className="w-3 h-3 opacity-70" />
+                      </button>
                     </div>
                   </div>
                 );

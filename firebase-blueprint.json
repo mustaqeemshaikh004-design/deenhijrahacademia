@@ -166,6 +166,10 @@
           "enum": ["dark", "light"],
           "description": "Preferred light or dark UI mode"
         },
+        "readNotificationIds": {
+          "type": "array",
+          "description": "Bounded list of up to 100 read in-app notification IDs synced across devices"
+        },
         "createdAt": {
           "type": "string",
           "description": "Creation server timestamp"
@@ -1062,6 +1066,164 @@
         }
       },
       "required": ["id", "title", "description", "posterUrl", "courseId", "courseTitle", "startUtc", "endUtc", "type", "pinnedToBoard", "pinColor", "locationOrLabel", "isPublished", "createdAt", "updatedAt"]
+    },
+    "CourseReview": {
+      "title": "CourseReview",
+      "description": "Student star rating and written review for an academic course",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Deterministic review ID (<courseId>_<authorId>)"
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target course ID"
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Reviewer user UID"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Reviewer display name"
+        },
+        "authorGender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Reviewer gender for symbolic avatar"
+        },
+        "authorAvatar": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional reviewer avatar URL"
+        },
+        "rating": {
+          "type": "number",
+          "description": "Integer star rating from 1 to 5"
+        },
+        "comment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Student written review comment"
+        },
+        "isVerifiedEnrollment": {
+          "type": "boolean",
+          "description": "True if the student is enrolled in the reviewed course"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether the review is visible publicly"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "courseId", "authorId", "authorName", "authorGender", "rating", "comment", "isVerifiedEnrollment", "isPublished", "createdAt", "updatedAt"]
+    },
+    "InstructorReview": {
+      "title": "InstructorReview",
+      "description": "Student star rating and written review for an academy faculty instructor",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Deterministic review ID (<instructorId>_<authorId>)"
+        },
+        "instructorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target faculty member ID"
+        },
+        "instructorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Faculty display name"
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Reviewer user UID"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Reviewer display name"
+        },
+        "authorGender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Reviewer gender for symbolic avatar"
+        },
+        "authorAvatar": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional reviewer avatar URL"
+        },
+        "courseId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional associated course ID"
+        },
+        "courseTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional associated course title"
+        },
+        "rating": {
+          "type": "number",
+          "description": "Integer star rating from 1 to 5"
+        },
+        "comment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Student written instructor review"
+        },
+        "isVerifiedStudent": {
+          "type": "boolean",
+          "description": "True if the reviewer is enrolled with this instructor"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether the review is visible publicly"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["id", "instructorId", "instructorName", "authorId", "authorName", "authorGender", "rating", "comment", "isVerifiedStudent", "isPublished", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1132,6 +1294,14 @@
     "/events/{eventId}": {
       "schema": { "$ref": "AcademyEvent" },
       "description": "Academy pinned poster board and calendar events"
+    },
+    "/courseReviews/{reviewId}": {
+      "schema": { "$ref": "CourseReview" },
+      "description": "Publicly readable, author-owned student ratings and reviews for courses"
+    },
+    "/instructorReviews/{reviewId}": {
+      "schema": { "$ref": "InstructorReview" },
+      "description": "Publicly readable, author-owned student ratings and reviews for faculty instructors"
     }
   }
 }

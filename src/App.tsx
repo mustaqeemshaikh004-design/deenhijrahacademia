@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Navbar,
@@ -25,6 +25,7 @@ import { AcademicCalendar } from './components/AcademicCalendar';
 import { ArticlesBlog, BlogArticlePage } from './components/ArticlesBlog';
 import { AboutSection } from './components/AboutSection';
 import { FacultySection } from './components/FacultySection';
+import { FacultyProfileModal } from './components/FacultyProfileModal';
 import { ContactSection } from './components/ContactSection';
 import { NavigationAIAssistant } from './components/NavigationAIAssistant';
 import { AccountSettingsModal } from './components/AccountSettingsModal';
@@ -43,6 +44,10 @@ import type {
   CompletedVideoArchive,
   PostComment,
   EnrollmentIntakePayload,
+  InAppNotification,
+  FacultyProfile,
+  CourseReview,
+  InstructorReview,
 } from './types';
 import { getUserTimezone, setSavedTimezonePreference } from './utils/timezone';
 import { findCourseBySlugOrId, toCourseSlug } from './utils/courseSlug';
@@ -62,16 +67,26 @@ import {
   addCommunityCommentInFirestore,
   toggleCommunityLikeInFirestore,
   createChatMessageInFirestore,
+  saveCourseReviewToFirestore,
+  deleteCourseReviewFromFirestore,
+  saveInstructorReviewToFirestore,
+  deleteInstructorReviewFromFirestore,
   subscribeToPlatformSettings,
   subscribeToCourses,
+  subscribeToEnrolledCourseRecordings,
   subscribeToEvents,
   subscribeToBlogPosts,
   subscribeToCommunityPosts,
   subscribeToChatMessages,
+  subscribeToCourseReviews,
+  subscribeToInstructorReviews,
   subscribeToUserAccount,
   subscribeToUserPreferences,
   saveUserThemePreferenceToFirestore,
   saveUserThemePreferenceToServer,
+  saveReadNotificationsToFirestore,
+  saveReadNotificationsToServer,
+  sanitizeReadNotificationIds,
   getStoredSessionToken,
   setStoredSessionToken,
   getStoredCachedUser,
@@ -414,6 +429,66 @@ export default function App() {
   const syncedUidRef = useRef<string | null>(null);
   const firestorePostIdsRef = useRef<Set<string>>(new Set());
 
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>(() => {
+    const cached = getStoredSessionToken() ? getStoredCachedUser() : null;
+    if (Array.isArray(cached?.readNotificationIds)) {
+      return sanitizeReadNotificationIds(cached.readNotificationIds);
+    }
+    if (cached?.id) {
+      try {
+        const saved = localStorage.getItem(`dha_read_notifs_${cached.id}`);
+        if (saved) return sanitizeReadNotificationIds(JSON.parse(saved));
+      } catch {
+        // Ignore storage error
+      }
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setReadNotificationIds([]);
+      return;
+    }
+    let merged = Array.isArray(currentUser.readNotificationIds)
+      ? currentUser.readNotificationIds
+      : [];
+    try {
+      const localRaw = localStorage.getItem(`dha_read_notifs_${currentUser.id}`);
+      if (localRaw) {
+        const parsed = JSON.parse(localRaw);
+        if (Array.isArray(parsed)) {
+          merged = [...merged, ...parsed];
+        }
+      }
+    } catch {
+      // Ignore storage error
+    }
+    setReadNotificationIds(sanitizeReadNotificationIds(merged));
+  }, [currentUser?.id, currentUser?.readNotificationIds]);
+
+  const applySyncedReadNotifications = useCallback((fbReadIds: string[]) => {
+    setReadNotificationIds((prev) => {
+      const merged = sanitizeReadNotificationIds([...prev, ...fbReadIds]);
+      if (merged.length === prev.length && merged.every((id, idx) => id === prev[idx])) {
+        return prev;
+      }
+      const active = currentUserRef.current;
+      if (active?.id) {
+        try {
+          localStorage.setItem(`dha_read_notifs_${active.id}`, JSON.stringify(merged));
+        } catch {
+          // Ignore storage error
+        }
+        const updatedUser = { ...active, readNotificationIds: merged };
+        currentUserRef.current = updatedUser;
+        setCurrentUser(updatedUser);
+        setStoredCachedUser(updatedUser);
+      }
+      return merged;
+    });
+  }, []);
+
   const [courses, setCourses] = useState<Course[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
@@ -421,6 +496,10 @@ export default function App() {
   const [moderationLogs, setModerationLogs] = useState<ModerationLog[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [articles, setArticles] = useState<BlogPost[]>([]);
+  const [facultyProfiles, setFacultyProfiles] = useState<FacultyProfile[]>([]);
+  const [courseReviews, setCourseReviews] = useState<CourseReview[]>([]);
+  const [instructorReviews, setInstructorReviews] = useState<InstructorReview[]>([]);
+  const [selectedFacultyProfile, setSelectedFacultyProfile] = useState<FacultyProfile | null>(null);
   const [settings, setSettings] = useState<PlatformSettings>({
     heroMode: 'video',
     heroVideoUrl: '',
@@ -489,6 +568,9 @@ export default function App() {
         calRes,
         blogRes,
         settingsRes,
+        facultyRes,
+        courseRevRes,
+        instructorRevRes,
         usersRes,
         modRes,
       ] = await Promise.all([
@@ -498,6 +580,9 @@ export default function App() {
         fetch('/api/calendar/events'),
         fetch('/api/blogs'),
         fetch('/api/settings'),
+        fetch('/api/faculty'),
+        fetch('/api/reviews/courses'),
+        fetch('/api/reviews/instructors'),
         isAdminViewer ? fetch('/api/users', { headers }) : Promise.resolve(null),
         isAdminViewer ? fetch('/api/admin/moderation-logs', { headers }) : Promise.resolve(null),
       ]);
@@ -540,6 +625,29 @@ export default function App() {
         setArticles(await blogRes.json());
       }
       setArticlesLoaded(true);
+      if (facultyRes.ok) {
+        setFacultyProfiles(await facultyRes.json());
+      }
+      if (courseRevRes.ok) {
+        const serverCourseRevs: CourseReview[] = await courseRevRes.json();
+        setCourseReviews((prev) => {
+          const byId = new Map(prev.map((r) => [r.id, r]));
+          serverCourseRevs.forEach((r) => byId.set(r.id, r));
+          return Array.from(byId.values()).sort(
+            (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          );
+        });
+      }
+      if (instructorRevRes.ok) {
+        const serverInstrRevs: InstructorReview[] = await instructorRevRes.json();
+        setInstructorReviews((prev) => {
+          const byId = new Map(prev.map((r) => [r.id, r]));
+          serverInstrRevs.forEach((r) => byId.set(r.id, r));
+          return Array.from(byId.values()).sort(
+            (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          );
+        });
+      }
       if (settingsRes.ok) {
         const loadedSettings: PlatformSettings = await settingsRes.json();
         const rawVideo = loadedSettings.heroVideoUrl || '';
@@ -867,6 +975,30 @@ export default function App() {
         },
         reportFirestoreError
       ),
+      subscribeToCourseReviews(
+        (fbReviews) => {
+          setCourseReviews((prev) => {
+            const byId = new Map(prev.map((r) => [r.id, r]));
+            fbReviews.forEach((r) => byId.set(r.id, r));
+            return Array.from(byId.values()).sort(
+              (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            );
+          });
+        },
+        reportFirestoreError
+      ),
+      subscribeToInstructorReviews(
+        (fbReviews) => {
+          setInstructorReviews((prev) => {
+            const byId = new Map(prev.map((r) => [r.id, r]));
+            fbReviews.forEach((r) => byId.set(r.id, r));
+            return Array.from(byId.values()).sort(
+              (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            );
+          });
+        },
+        reportFirestoreError
+      ),
       subscribeToUserAccount(
         firebaseUser.uid,
         (patch) => {
@@ -886,14 +1018,112 @@ export default function App() {
           if (isTesterModeRef.current) return;
           applySyncedTheme(fbTheme);
         },
-        reportFirestoreError
+        reportFirestoreError,
+        (fbReadIds) => {
+          if (isTesterModeRef.current) return;
+          applySyncedReadNotifications(fbReadIds);
+        }
       ),
     ];
 
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [isAuthReady, isVerifiedUser, firebaseUser?.uid, reportFirestoreError, applySyncedTheme]);
+  }, [
+    isAuthReady,
+    isVerifiedUser,
+    firebaseUser?.uid,
+    reportFirestoreError,
+    applySyncedTheme,
+    applySyncedReadNotifications,
+  ]);
+
+  // Real-time Firestore listener for recordings added to enrolled courses
+  const enrolledCourseIdsKey = useMemo(() => {
+    if (!currentUser?.id) return '';
+    return courses
+      .filter((c) => Array.isArray(c.enrolledStudentIds) && c.enrolledStudentIds.includes(currentUser.id))
+      .map((c) => c.id)
+      .sort()
+      .join(',');
+  }, [courses, currentUser?.id]);
+
+  useEffect(() => {
+    if (!isAuthReady || !isVerifiedUser || !firebaseUser || !enrolledCourseIdsKey) return;
+    const ids = enrolledCourseIdsKey.split(',').filter(Boolean);
+    if (ids.length === 0) return;
+
+    return subscribeToEnrolledCourseRecordings(
+      ids,
+      (courseId, fbRecordings) => {
+        setCourses((prev) =>
+          prev.map((course) => {
+            if (course.id !== courseId) return course;
+            const existingById = new Map((course.videoArchives || []).map((r) => [r.id, r]));
+            let changed = false;
+            for (const fbRec of fbRecordings) {
+              const existing = existingById.get(fbRec.id);
+              if (!existing) {
+                existingById.set(fbRec.id, fbRec);
+                changed = true;
+              } else if (
+                existing.title !== fbRec.title ||
+                existing.recordedAt !== fbRec.recordedAt
+              ) {
+                existingById.set(fbRec.id, {
+                  ...existing,
+                  title: fbRec.title,
+                  duration: fbRec.duration,
+                  recordedAt: fbRec.recordedAt,
+                });
+                changed = true;
+              }
+            }
+            if (!changed) return course;
+            return {
+              ...course,
+              videoArchives: Array.from(existingById.values()),
+            };
+          })
+        );
+      },
+      reportFirestoreError
+    );
+  }, [isAuthReady, isVerifiedUser, firebaseUser?.uid, enrolledCourseIdsKey, reportFirestoreError]);
+
+  // Lightweight background refresh when signed in so email/password students receive new recording & pinned event alerts
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const refreshFeeds = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const headers = await getAuthHeaders();
+        const [coursesRes, calRes] = await Promise.all([
+          fetch('/api/courses', { headers, credentials: 'include' }),
+          fetch('/api/calendar/events'),
+        ]);
+        if (coursesRes.ok) {
+          setCourses(await coursesRes.json());
+        }
+        if (calRes.ok) {
+          setCalendarEvents(await calRes.json());
+        }
+      } catch {
+        // Non-fatal background sync
+      }
+    };
+    const interval = setInterval(() => {
+      void refreshFeeds();
+    }, 20000);
+    const onFocus = () => {
+      void refreshFeeds();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [currentUser?.id]);
 
   // Synchronize dynamic browser tab favicon with Academy Custom Logo
   useEffect(() => {
@@ -1797,6 +2027,290 @@ export default function App() {
     }
   };
 
+  const handleOpenFacultyByInstructor = useCallback(
+    (instructorId: string, instructorName: string) => {
+      const cleanName = (instructorName || '').trim().toLowerCase();
+      const matched =
+        facultyProfiles.find(
+          (f) =>
+            (instructorId && f.id === instructorId) ||
+            (cleanName && f.fullName.trim().toLowerCase() === cleanName)
+        ) || null;
+      if (matched) {
+        setSelectedFacultyProfile(matched);
+        return;
+      }
+      const displayName = instructorName?.trim() || 'Mustaqeem Shaikh';
+      const nameParts = displayName.split(/\s+/);
+      const isDirector = cleanName.includes('mustaqeem') || instructorId === 'admin-mustaqeem';
+      setSelectedFacultyProfile({
+        id: instructorId || `faculty-${displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        firstName: nameParts[0] || displayName,
+        lastName: nameParts.slice(1).join(' '),
+        fullName: displayName,
+        title: isDirector ? 'Founding Director' : 'Course Instructor',
+        roleLabel: isDirector
+          ? 'Founding Director & Lead Academic Steward'
+          : 'Academy Cohort Instructor & Mentor',
+        specialty: isDirector
+          ? 'Institutional Architecture, Seerah & Scholastic Oversight'
+          : 'Classical Islamic Sciences & Guided Instruction',
+        bio: isDirector
+          ? 'Leading curriculum governance, academic admissions, live scholarly instruction, and digital classroom infrastructure for Deen Hijrah Academia.'
+          : `Dedicated academy scholar guiding structured cohorts, primary text analysis, and student mastery reviews at Deen Hijrah Academia.`,
+        qualifications: isDirector
+          ? [
+              'Founding Director & Academic Chancellor — Deen Hijrah Academia',
+              'Curriculum Architect for Seerah & Classical Studies',
+            ]
+          : ['Certified Faculty Instructor — Deen Hijrah Academia'],
+        email: isDirector ? 'faculty.director@deenhijrahacademia.edu' : undefined,
+        gender: 'male',
+        isVerifiedDirector: isDirector,
+      });
+    },
+    [facultyProfiles]
+  );
+
+  const handleSaveCourseReview = async (
+    courseId: string,
+    rating: number,
+    comment: string
+  ) => {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`/api/courses/${courseId}/reviews`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ rating, comment }),
+    });
+    if (!res.ok) {
+      const msg = await readApiError(res, 'Failed to publish course review.');
+      throw new Error(msg);
+    }
+    const saved: CourseReview = await res.json();
+    setCourseReviews((prev) => [
+      saved,
+      ...prev.filter((r) => r.id !== saved.id),
+    ]);
+    saveCourseReviewToFirestore(saved).catch(reportFirestoreError);
+    showToast('success', 'Course review saved!');
+  };
+
+  const handleDeleteCourseReview = async (courseId: string, reviewId: string) => {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/courses/${courseId}/reviews/${reviewId}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const msg = await readApiError(res, 'Failed to remove course review.');
+      throw new Error(msg);
+    }
+    setCourseReviews((prev) => prev.filter((r) => r.id !== reviewId));
+    deleteCourseReviewFromFirestore(courseId, reviewId).catch(reportFirestoreError);
+    showToast('info', 'Course review removed.');
+  };
+
+  const handleSaveInstructorReview = async (payload: {
+    instructorId: string;
+    instructorName: string;
+    rating: number;
+    comment: string;
+    courseId?: string;
+    courseTitle?: string;
+  }) => {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`/api/instructors/${payload.instructorId}/reviews`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const msg = await readApiError(res, 'Failed to publish instructor review.');
+      throw new Error(msg);
+    }
+    const saved: InstructorReview = await res.json();
+    setInstructorReviews((prev) => [
+      saved,
+      ...prev.filter((r) => r.id !== saved.id),
+    ]);
+    saveInstructorReviewToFirestore(saved).catch(reportFirestoreError);
+    showToast('success', 'Instructor review saved!');
+  };
+
+  const handleDeleteInstructorReview = async (
+    instructorId: string,
+    reviewId: string
+  ) => {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/instructors/${instructorId}/reviews/${reviewId}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const msg = await readApiError(res, 'Failed to remove instructor review.');
+      throw new Error(msg);
+    }
+    setInstructorReviews((prev) => prev.filter((r) => r.id !== reviewId));
+    deleteInstructorReviewFromFirestore(instructorId, reviewId).catch(
+      reportFirestoreError
+    );
+    showToast('info', 'Instructor review removed.');
+  };
+
+  const readNotificationIdSet = useMemo(() => new Set(readNotificationIds), [readNotificationIds]);
+
+  const notifications = useMemo<InAppNotification[]>(() => {
+    if (!currentUser?.id) return [];
+    const items: InAppNotification[] = [];
+
+    for (const course of courses) {
+      if (!Array.isArray(course.enrolledStudentIds) || !course.enrolledStudentIds.includes(currentUser.id)) {
+        continue;
+      }
+      for (const rec of course.videoArchives || []) {
+        const id = `rec:${course.id}:${rec.id}`;
+        items.push({
+          id,
+          type: 'recording',
+          title: rec.title || 'New Lecture Recording',
+          subtitle: `${course.code ? `${course.code} · ` : ''}${course.title}${rec.duration ? ` (${rec.duration})` : ''}`,
+          timestamp: rec.recordedAt || new Date(0).toISOString(),
+          courseId: course.id,
+          recordingId: rec.id,
+          read: readNotificationIdSet.has(id),
+        });
+      }
+    }
+
+    for (const ev of calendarEvents) {
+      if (ev.isDerived || ev.pinnedToBoard === false) continue;
+      const id = `evt:${ev.id}`;
+      items.push({
+        id,
+        type: 'pinned_event',
+        title: ev.title || 'Pinned Academy Event',
+        subtitle: `${ev.courseTitle ? `${ev.courseTitle} · ` : ''}${ev.locationOrLabel || 'Campus Notice Board'}`,
+        timestamp: ev.startUtc || new Date(0).toISOString(),
+        eventId: ev.id,
+        courseId: ev.courseId,
+        read: readNotificationIdSet.has(id),
+      });
+    }
+
+    items.sort((a, b) => {
+      const tA = Date.parse(a.timestamp);
+      const tB = Date.parse(b.timestamp);
+      return (Number.isNaN(tB) ? 0 : tB) - (Number.isNaN(tA) ? 0 : tA);
+    });
+    return items;
+  }, [currentUser?.id, courses, calendarEvents, readNotificationIdSet]);
+
+  const unreadNotificationsCount = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  );
+
+  // Toast alert when a new recording or pinned event arrives during an active session
+  const seenNotifSessionRef = useRef<{ userId: string | null; ids: Set<string>; initialized: boolean }>({
+    userId: null,
+    ids: new Set(),
+    initialized: false,
+  });
+
+  useEffect(() => {
+    const uid = currentUser?.id || null;
+    if (!uid) {
+      seenNotifSessionRef.current = { userId: null, ids: new Set(), initialized: false };
+      return;
+    }
+    if (seenNotifSessionRef.current.userId !== uid) {
+      seenNotifSessionRef.current = {
+        userId: uid,
+        ids: new Set(notifications.map((n) => n.id)),
+        initialized: courses.length > 0 || calendarEvents.length > 0,
+      };
+      return;
+    }
+    if (!seenNotifSessionRef.current.initialized) {
+      if (courses.length > 0 || calendarEvents.length > 0) {
+        seenNotifSessionRef.current.ids = new Set(notifications.map((n) => n.id));
+        seenNotifSessionRef.current.initialized = true;
+      }
+      return;
+    }
+
+    const newlyArrived = notifications.filter(
+      (n) => !n.read && !seenNotifSessionRef.current.ids.has(n.id)
+    );
+    notifications.forEach((n) => seenNotifSessionRef.current.ids.add(n.id));
+    if (newlyArrived.length > 0) {
+      const latest = newlyArrived[0];
+      showToast(
+        'info',
+        latest.type === 'recording'
+          ? `New recording added: ${latest.title} (${latest.subtitle})`
+          : `Event pinned: ${latest.title}`
+      );
+    }
+  }, [currentUser?.id, notifications, courses.length, calendarEvents.length]);
+
+  const persistReadNotificationIds = useCallback(
+    (nextRawIds: string[]) => {
+      const nextIds = sanitizeReadNotificationIds(nextRawIds);
+      setReadNotificationIds(nextIds);
+
+      const activeUser = currentUserRef.current;
+      if (!activeUser?.id) return;
+
+      try {
+        localStorage.setItem(`dha_read_notifs_${activeUser.id}`, JSON.stringify(nextIds));
+      } catch {
+        // Ignore storage error
+      }
+
+      if (!isTesterModeRef.current) {
+        const updatedUser: User = { ...activeUser, readNotificationIds: nextIds };
+        currentUserRef.current = updatedUser;
+        setCurrentUser(updatedUser);
+        setStoredCachedUser(updatedUser);
+
+        if (isVerifiedUser && firebaseUser) {
+          saveReadNotificationsToFirestore(nextIds, theme).catch(reportFirestoreError);
+        }
+        void saveReadNotificationsToServer(activeUser.id, nextIds, activeUser.email);
+      }
+    },
+    [firebaseUser, isVerifiedUser, reportFirestoreError, theme]
+  );
+
+  const handleNotificationClick = (notif: InAppNotification) => {
+    if (!notif.read) {
+      persistReadNotificationIds([...readNotificationIds, notif.id]);
+    }
+    if (notif.type === 'recording' && notif.courseId) {
+      const targetCourse = courses.find((c) => c.id === notif.courseId);
+      if (targetCourse) {
+        handleOpenCoursePage(targetCourse);
+        return;
+      }
+      handleNavigateWithLoader('student-portal');
+      return;
+    }
+    if (notif.type === 'pinned_event') {
+      setPinBoardOpen(true);
+    }
+  };
+
+  const handleMarkAllNotificationsRead = () => {
+    if (notifications.length === 0) return;
+    persistReadNotificationIds([...readNotificationIds, ...notifications.map((n) => n.id)]);
+  };
+
   const isLight = theme === 'light';
   const prefersReducedPageMotion = useReducedMotion();
   const routeTransitionKey = `${activeTab}:${selectedCourseId || ''}:${selectedBlogId || ''}:${
@@ -1888,6 +2402,10 @@ export default function App() {
         customNavItems={settings.customNavItems}
         theme={theme}
         onToggleTheme={toggleTheme}
+        notifications={notifications}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onNotificationClick={handleNotificationClick}
+        onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
       />
 
       {/* 4. Active Main Content Route with Smooth Architectural Page Transitions */}
@@ -1966,6 +2484,8 @@ export default function App() {
                 onSeedSampleCourse={handleSeedSampleCourse}
                 onNavigateAuth={(mode) => handleNavigateWithLoader(mode)}
                 isAdmin={currentUser?.role === 'admin'}
+                courseReviews={courseReviews}
+                onSelectInstructor={handleOpenFacultyByInstructor}
               />
             </div>
 
@@ -1973,7 +2493,12 @@ export default function App() {
             <AboutSection />
 
             {/* Faculty Section */}
-            <FacultySection />
+            <FacultySection
+              facultyProfiles={facultyProfiles}
+              courses={courses}
+              instructorReviews={instructorReviews}
+              onSelectFaculty={(prof) => setSelectedFacultyProfile(prof)}
+            />
 
             {/* Contact Section */}
             <ContactSection />
@@ -1991,6 +2516,8 @@ export default function App() {
               onSeedSampleCourse={handleSeedSampleCourse}
               onNavigateAuth={(mode) => handleNavigateWithLoader(mode)}
               isAdmin={currentUser?.role === 'admin'}
+              courseReviews={courseReviews}
+              onSelectInstructor={handleOpenFacultyByInstructor}
             />
           </div>
         )}
@@ -2020,6 +2547,11 @@ export default function App() {
             onNavigateToPortal={() => handleNavigateWithLoader('student-portal')}
             onNavigateToRegistration={handleOpenCourseRegistration}
             onRefreshData={fetchData}
+            courseReviews={courseReviews}
+            onSaveCourseReview={handleSaveCourseReview}
+            onDeleteCourseReview={handleDeleteCourseReview}
+            onSelectInstructor={handleOpenFacultyByInstructor}
+            onNavigateAuth={(mode) => handleNavigateWithLoader(mode)}
           />
         )}
 
@@ -2082,7 +2614,14 @@ export default function App() {
         )}
 
         {/* TAB: FACULTY */}
-        {activeTab === 'faculty' && <FacultySection />}
+        {activeTab === 'faculty' && (
+          <FacultySection
+            facultyProfiles={facultyProfiles}
+            courses={courses}
+            instructorReviews={instructorReviews}
+            onSelectFaculty={(prof) => setSelectedFacultyProfile(prof)}
+          />
+        )}
 
         {/* TAB: ABOUT */}
         {activeTab === 'about' && <AboutSection />}
@@ -2268,6 +2807,8 @@ export default function App() {
               onSeedSampleCourse={handleSeedSampleCourse}
               onNavigateAuth={(mode) => handleNavigateWithLoader(mode)}
               isAdmin={currentUser?.role === 'admin'}
+              courseReviews={courseReviews}
+              onSelectInstructor={handleOpenFacultyByInstructor}
             />
           </div>
         )}
@@ -2377,6 +2918,19 @@ export default function App() {
         }
         onJoinEventMeeting={handleJoinEventMeeting}
         onStartEventMeeting={handleStartEventMeeting}
+      />
+
+      {/* Interactive Faculty Biography & Instructor Reviews Modal */}
+      <FacultyProfileModal
+        faculty={selectedFacultyProfile}
+        courses={courses}
+        reviews={instructorReviews}
+        currentUser={currentUser}
+        onClose={() => setSelectedFacultyProfile(null)}
+        onSelectCourse={handleOpenCoursePage}
+        onSaveInstructorReview={handleSaveInstructorReview}
+        onDeleteInstructorReview={handleDeleteInstructorReview}
+        onNavigateAuth={(mode) => handleNavigateWithLoader(mode)}
       />
 
       {/* Built-in Live Sanctuary Classroom & Recording Studio Modal */}

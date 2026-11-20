@@ -9,11 +9,15 @@ import {
   User as UserIcon,
   ExternalLink,
   SlidersHorizontal,
+  Bell,
+  Video,
+  Pin,
+  CheckCheck,
 } from 'lucide-react';
 import { SymbolicAvatar } from './SymbolicAvatar';
 import { LiveTimezoneClock } from './LiveTimezoneClock';
 import { BrandLogo } from './BrandLogo';
-import type { User, CustomNavItem } from '../types';
+import type { User, CustomNavItem, InAppNotification } from '../types';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -26,6 +30,10 @@ interface NavbarProps {
   customNavItems?: CustomNavItem[];
   theme?: 'dark' | 'light';
   onToggleTheme?: () => void;
+  notifications?: InAppNotification[];
+  unreadNotificationsCount?: number;
+  onNotificationClick?: (notification: InAppNotification) => void;
+  onMarkAllNotificationsRead?: () => void;
 }
 
 const RESTRICTED_NAV_KEYS = new Set([
@@ -68,6 +76,20 @@ export function resolvePublicNavLinks(customNavItems?: CustomNavItem[]): CustomN
   );
 }
 
+export function formatNotificationTime(iso: string): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return 'Recent';
+  const diffMs = Date.now() - ts;
+  if (diffMs < 60_000) return 'Just now';
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   activeTab,
@@ -79,20 +101,32 @@ export const Navbar: React.FC<NavbarProps> = ({
   customNavItems,
   theme = 'dark',
   onToggleTheme,
+  notifications = [],
+  unreadNotificationsCount = 0,
+  onNotificationClick,
+  onMarkAllNotificationsRead,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [notifMenuOpen, setNotifMenuOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement | null>(null);
+  const notifRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!profileMenuOpen) return;
+    if (!profileMenuOpen && !notifMenuOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+      if (profileMenuOpen && profileRef.current && !profileRef.current.contains(e.target as Node)) {
         setProfileMenuOpen(false);
+      }
+      if (notifMenuOpen && notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifMenuOpen(false);
       }
     };
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setProfileMenuOpen(false);
+      if (e.key === 'Escape') {
+        setProfileMenuOpen(false);
+        setNotifMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleOutside);
     document.addEventListener('keydown', handleEsc);
@@ -100,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [profileMenuOpen]);
+  }, [profileMenuOpen, notifMenuOpen]);
 
   // Never display Admin, Teacher, or Portal links in the top navbar
   const navLinks = resolvePublicNavLinks(customNavItems);
@@ -217,11 +251,204 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
+          {currentUser && (
+            <div className="relative shrink-0" ref={notifRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  setNotifMenuOpen((prev) => !prev);
+                }}
+                aria-expanded={notifMenuOpen}
+                aria-label={
+                  unreadNotificationsCount > 0
+                    ? `Notifications (${unreadNotificationsCount} unread)`
+                    : 'Notifications'
+                }
+                title={
+                  unreadNotificationsCount > 0
+                    ? `${unreadNotificationsCount} unread alert${unreadNotificationsCount === 1 ? '' : 's'}`
+                    : 'Notifications'
+                }
+                className={`relative p-2 rounded-xl transition-colors border shrink-0 ${
+                  notifMenuOpen
+                    ? isLight
+                      ? 'bg-sky-50 text-[#0284C7] border-[#0284C7]/40'
+                      : 'bg-slate-800 text-[#00F2FE] border-[#00F2FE]/40'
+                    : isLight
+                    ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
+                }`}
+              >
+                <Bell className="w-4 h-4" />
+                {unreadNotificationsCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-gradient-to-r from-[#00F2FE] to-[#10B981] text-slate-950 text-[10px] font-extrabold leading-none flex items-center justify-center shadow-[0_0_10px_rgba(0,242,254,0.55)] tabular-nums">
+                    {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+
+              <AnimatePresence>
+                {notifMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.94 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                    className={`absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-2xl border shadow-2xl overflow-hidden z-50 origin-top-right ${
+                      isLight
+                        ? 'bg-white border-slate-200 text-slate-900'
+                        : 'bg-[#0A192F] border-slate-700 text-slate-100'
+                    }`}
+                  >
+                    <div
+                      className={`px-4 py-3 border-b flex items-center justify-between gap-2 ${
+                        isLight ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800 bg-[#071120]/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Bell className={`w-4 h-4 ${isLight ? 'text-[#0284C7]' : 'text-[#00F2FE]'}`} />
+                        <span className="text-xs font-bold tracking-wide uppercase">
+                          Notifications
+                        </span>
+                        {unreadNotificationsCount > 0 && (
+                          <span
+                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md font-semibold ${
+                              isLight
+                                ? 'bg-sky-100 text-[#0284C7]'
+                                : 'bg-[#00F2FE]/15 text-[#00F2FE]'
+                            }`}
+                          >
+                            {unreadNotificationsCount} new
+                          </span>
+                        )}
+                      </div>
+
+                      {unreadNotificationsCount > 0 && onMarkAllNotificationsRead && (
+                        <button
+                          type="button"
+                          onClick={() => onMarkAllNotificationsRead()}
+                          className={`inline-flex items-center gap-1 text-[11px] font-semibold transition-colors ${
+                            isLight
+                              ? 'text-[#0284C7] hover:text-sky-800'
+                              : 'text-[#00F2FE] hover:text-cyan-200'
+                          }`}
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>Mark all read</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-200/70 dark:divide-slate-800/80">
+                      {notifications.length === 0 ? (
+                        <div className="px-5 py-8 text-center space-y-2">
+                          <div
+                            className={`w-10 h-10 rounded-full mx-auto flex items-center justify-center ${
+                              isLight ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-slate-500'
+                            }`}
+                          >
+                            <Bell className="w-5 h-5" />
+                          </div>
+                          <p className="text-xs font-semibold">You&apos;re all caught up</p>
+                          <p className={`text-[11px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                            Alerts appear here when new lecture recordings are added to your enrolled courses or when academy events are pinned.
+                          </p>
+                        </div>
+                      ) : (
+                        notifications.map((notif) => (
+                          <button
+                            key={notif.id}
+                            type="button"
+                            onClick={() => {
+                              setNotifMenuOpen(false);
+                              onNotificationClick?.(notif);
+                            }}
+                            className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors ${
+                              !notif.read
+                                ? isLight
+                                  ? 'bg-sky-50/70 hover:bg-sky-100/70'
+                                  : 'bg-[#0F2942]/65 hover:bg-[#133556]'
+                                : isLight
+                                ? 'hover:bg-slate-50'
+                                : 'hover:bg-slate-900/50'
+                            }`}
+                          >
+                            <div
+                              className={`mt-0.5 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                                notif.type === 'recording'
+                                  ? isLight
+                                    ? 'bg-sky-100 text-[#0284C7] border-sky-200'
+                                    : 'bg-[#00F2FE]/10 text-[#00F2FE] border-[#00F2FE]/25'
+                                  : isLight
+                                  ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                              }`}
+                            >
+                              {notif.type === 'recording' ? (
+                                <Video className="w-4 h-4" />
+                              ) : (
+                                <Pin className="w-4 h-4" />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  className={`text-[10px] font-mono uppercase tracking-wider ${
+                                    notif.type === 'recording'
+                                      ? isLight
+                                        ? 'text-[#0284C7]'
+                                        : 'text-[#00F2FE]'
+                                      : isLight
+                                      ? 'text-emerald-700'
+                                      : 'text-emerald-400'
+                                  }`}
+                                >
+                                  {notif.type === 'recording' ? 'New Recording' : 'Pinned Event'}
+                                </span>
+                                <span className={`text-[10px] font-mono shrink-0 ${isLight ? 'text-slate-400' : 'text-slate-500'}`}>
+                                  {formatNotificationTime(notif.timestamp)}
+                                </span>
+                              </div>
+                              <p
+                                className={`text-xs leading-snug line-clamp-2 ${
+                                  !notif.read ? 'font-bold' : 'font-medium opacity-85'
+                                }`}
+                              >
+                                {notif.title}
+                              </p>
+                              <p className={`text-[11px] truncate ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
+                                {notif.subtitle}
+                              </p>
+                            </div>
+
+                            {!notif.read && (
+                              <span
+                                aria-label="Unread"
+                                className={`mt-2 w-2 h-2 rounded-full shrink-0 ${
+                                  isLight ? 'bg-[#0284C7]' : 'bg-[#00F2FE]'
+                                }`}
+                              />
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
           {currentUser ? (
             <div className="relative flex items-center gap-1.5 sm:gap-2" ref={profileRef}>
               <button
                 type="button"
-                onClick={() => setProfileMenuOpen((prev) => !prev)}
+                onClick={() => {
+                  setNotifMenuOpen(false);
+                  setProfileMenuOpen((prev) => !prev);
+                }}
                 aria-expanded={profileMenuOpen}
                 aria-label={`Open profile menu for ${currentUser.firstName} ${currentUser.lastName}`}
                 className={`group relative rounded-full p-1 transition-all duration-300 hover:scale-110 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00F2FE] shrink-0 ${

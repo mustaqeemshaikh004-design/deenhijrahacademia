@@ -25,11 +25,17 @@ import {
   Users,
   CalendarClock,
   Play,
+  Star,
+  MessageSquare,
+  Trash2,
+  LogIn,
+  ArrowUpRight,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type {
   AcademicAssessment,
   Course,
+  CourseReview,
   EnrollmentIntakePayload,
   StudentSubmission,
   User,
@@ -40,6 +46,8 @@ import { getAuthHeaders } from '../services/firebaseService';
 import { CourseRecordingsWorkspace } from './CourseRecordingsWorkspace';
 import { AssignmentSubmissionBox } from './AssignmentSubmissionBox';
 import { ModuleQuizRunner } from './ModuleQuizRunner';
+import { SymbolicAvatar } from './SymbolicAvatar';
+import { StarRatingDisplay, StarRatingInput } from './StarRating';
 import {
   findQuizForModule,
   loadCompletedModuleIds,
@@ -71,6 +79,11 @@ interface CourseDetailPageProps {
   onNavigateToPortal: () => void;
   onNavigateToRegistration?: (course: Course) => void;
   onRefreshData?: () => void;
+  courseReviews?: CourseReview[];
+  onSaveCourseReview?: (courseId: string, rating: number, comment: string) => Promise<void>;
+  onDeleteCourseReview?: (courseId: string, reviewId: string) => Promise<void>;
+  onSelectInstructor?: (instructorId: string, instructorName: string) => void;
+  onNavigateAuth?: (mode: 'signin' | 'signup') => void;
 }
 
 export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
@@ -84,9 +97,14 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
   onNavigateToPortal,
   onNavigateToRegistration,
   onRefreshData,
+  courseReviews = [],
+  onSaveCourseReview,
+  onDeleteCourseReview,
+  onSelectInstructor,
+  onNavigateAuth,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'recordings' | 'syllabus' | 'schedules' | 'materials' | 'assignments' | 'tutor'
+    'recordings' | 'syllabus' | 'schedules' | 'materials' | 'assignments' | 'reviews' | 'tutor'
   >('recordings');
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [enrollDrawerOpen, setEnrollDrawerOpen] = useState(false);
@@ -124,6 +142,15 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
   > | null>(null);
   const [completedModuleIds, setCompletedModuleIds] = useState<string[]>([]);
   const [activeModuleQuiz, setActiveModuleQuiz] = useState<AcademicAssessment | null>(null);
+
+  // Course Review Form State
+  const [reviewRating, setReviewRating] = useState<number>(5);
+  const [reviewComment, setReviewComment] = useState<string>('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
+  const [reviewStatus, setReviewStatus] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     if (currentUser) {
@@ -179,7 +206,37 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
   useEffect(() => {
     setActiveAssignmentTarget(null);
     setActiveModuleQuiz(null);
+    setReviewStatus(null);
   }, [course?.id]);
+
+  const currentCourseReviews = React.useMemo(() => {
+    if (!course?.id) return [];
+    return courseReviews
+      .filter((r) => r.courseId === course.id)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [courseReviews, course?.id]);
+
+  const myCourseReview = React.useMemo(() => {
+    if (!currentUser?.id) return null;
+    return currentCourseReviews.find((r) => r.authorId === currentUser.id) || null;
+  }, [currentCourseReviews, currentUser?.id]);
+
+  const averageCourseRating = React.useMemo(() => {
+    if (currentCourseReviews.length === 0) return 0;
+    const sum = currentCourseReviews.reduce((acc, r) => acc + (Number(r.rating) || 0), 0);
+    return Number((sum / currentCourseReviews.length).toFixed(1));
+  }, [currentCourseReviews]);
+
+  useEffect(() => {
+    if (myCourseReview) {
+      setReviewRating(myCourseReview.rating);
+      setReviewComment(myCourseReview.comment);
+    } else {
+      setReviewRating(5);
+      setReviewComment('');
+    }
+    setReviewStatus(null);
+  }, [course?.id, myCourseReview?.id]);
 
   if (!course) {
     return (
@@ -384,6 +441,22 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
                 </span>
                 <span className="text-slate-400" aria-hidden="true">·</span>
                 <span className="text-slate-500 dark:text-slate-400">Free Tuition Cohort</span>
+                {currentCourseReviews.length > 0 && (
+                  <>
+                    <span className="text-slate-400" aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('reviews')}
+                      className="inline-flex items-center gap-1 hover:underline"
+                    >
+                      <StarRatingDisplay
+                        rating={averageCourseRating}
+                        size="xs"
+                        reviewCount={currentCourseReviews.length}
+                      />
+                    </button>
+                  </>
+                )}
               </div>
 
               <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight text-balance">
@@ -729,6 +802,15 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
                   icon: ClipboardCheck,
                 },
                 {
+                  key: 'reviews',
+                  label: 'Course Reviews',
+                  sub:
+                    currentCourseReviews.length > 0
+                      ? `${averageCourseRating.toFixed(1)} ★ (${currentCourseReviews.length})`
+                      : 'Rate Course',
+                  icon: Star,
+                },
+                {
                   key: 'tutor',
                   label: 'Course AI Tutor',
                   sub: 'Interactive Q&A',
@@ -789,14 +871,22 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
               </div>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800">
-              <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">
-                Instructor
+            <button
+              type="button"
+              onClick={() => onSelectInstructor?.(course.instructorId, course.instructorName)}
+              className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800 hover:border-[#0284C7]/60 dark:hover:border-[#00F2FE]/60 text-left transition-all group"
+            >
+              <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400 flex items-center justify-between gap-1">
+                <span>Instructor</span>
+                <ArrowUpRight className="w-3 h-3 text-[#0284C7] dark:text-[#00F2FE] opacity-70 group-hover:opacity-100" />
               </div>
-              <div className="font-bold text-slate-900 dark:text-white mt-1 leading-snug">
+              <div className="font-bold text-slate-900 dark:text-white group-hover:text-[#0284C7] dark:group-hover:text-[#00F2FE] mt-1 leading-snug transition-colors">
                 {course.instructorName}
               </div>
-            </div>
+              <div className="text-[10px] font-mono text-[#0284C7] dark:text-[#00F2FE] mt-0.5">
+                View Bio &amp; Review →
+              </div>
+            </button>
 
             <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800">
               <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">
@@ -1737,6 +1827,311 @@ export const CourseDetailPage: React.FC<CourseDetailPageProps> = ({
               </button>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* TAB 7: Student Course Reviews & Instructor Rating Shortcut */}
+      {activeTab === 'reviews' && (
+        <div className="space-y-6">
+          {/* Rating Summary + Faculty Review Shortcut */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+            <div className="md:col-span-7 p-6 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-5 shadow-sm">
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-mono uppercase tracking-wider text-[#0284C7] dark:text-[#00F2FE] font-semibold">
+                  Student Course Evaluations
+                </div>
+                <div className="flex items-baseline gap-3">
+                  <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white font-mono tabular-nums">
+                    {currentCourseReviews.length > 0 ? averageCourseRating.toFixed(1) : '—'}
+                  </span>
+                  <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                    out of 5 · {currentCourseReviews.length}{' '}
+                    {currentCourseReviews.length === 1 ? 'Review' : 'Reviews'}
+                  </span>
+                </div>
+                <StarRatingDisplay
+                  rating={averageCourseRating}
+                  size="md"
+                  showNumeric={false}
+                />
+              </div>
+
+              <div className="flex-1 max-w-[220px] space-y-1">
+                {[5, 4, 3, 2, 1].map((starLevel) => {
+                  const count = currentCourseReviews.filter(
+                    (r) => Math.round(r.rating) === starLevel
+                  ).length;
+                  const pct =
+                    currentCourseReviews.length > 0
+                      ? Math.round((count / currentCourseReviews.length) * 100)
+                      : 0;
+                  return (
+                    <div key={starLevel} className="flex items-center gap-2 text-[11px] font-mono">
+                      <span className="w-6 text-slate-600 dark:text-slate-300 tabular-nums">
+                        {starLevel}★
+                      </span>
+                      <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-amber-400"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-6 text-right text-slate-500 dark:text-slate-400 tabular-nums">
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="md:col-span-5 p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-4">
+              <div>
+                <div className="text-[11px] font-mono uppercase tracking-wider text-amber-600 dark:text-amber-300 font-semibold">
+                  Course Instructor
+                </div>
+                <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                  {course.instructorName}
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                  Read {course.instructorName}&apos;s full faculty biography or leave a dedicated instructor review.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onSelectInstructor?.(course.instructorId, course.instructorName)}
+                className="w-full px-4 py-2.5 rounded-xl text-xs font-bold text-[#0284C7] dark:text-[#00F2FE] bg-white dark:bg-slate-950 hover:bg-sky-50 dark:hover:bg-slate-800 border border-[#0284C7]/35 dark:border-[#00F2FE]/40 transition-colors inline-flex items-center justify-center gap-1.5"
+              >
+                <span>Open Faculty Profile &amp; Review Instructor</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Student Course Review Submission / Edit Form */}
+          {currentUser ? (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!onSaveCourseReview) return;
+                const trimmed = reviewComment.trim();
+                if (!trimmed) {
+                  setReviewStatus({
+                    type: 'error',
+                    text: 'Please share a brief comment about this course.',
+                  });
+                  return;
+                }
+                setIsSubmittingReview(true);
+                setReviewStatus(null);
+                try {
+                  await onSaveCourseReview(course.id, reviewRating, trimmed);
+                  setReviewStatus({
+                    type: 'success',
+                    text: myCourseReview
+                      ? 'Your course review has been updated.'
+                      : 'Thank you! Your course review is now published.',
+                  });
+                } catch (err) {
+                  setReviewStatus({
+                    type: 'error',
+                    text:
+                      err instanceof Error
+                        ? err.message
+                        : 'Unable to publish course review right now.',
+                  });
+                } finally {
+                  setIsSubmittingReview(false);
+                }
+              }}
+              className="p-6 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-[#0284C7] dark:text-[#00F2FE]" />
+                  <span>
+                    {myCourseReview ? 'Update Your Course Review' : 'Leave a Student Course Review'}
+                  </span>
+                </h3>
+                {isEnrolled && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Verified Enrolled Student</span>
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                  Star Rating
+                </label>
+                <StarRatingInput
+                  value={reviewRating}
+                  onChange={setReviewRating}
+                  disabled={isSubmittingReview}
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                  Written Review
+                </label>
+                <textarea
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                  rows={3}
+                  maxLength={1500}
+                  disabled={isSubmittingReview}
+                  placeholder={`Share how ${course.title} helped your learning journey...`}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-[#00F2FE]"
+                />
+                <div className="mt-1 text-[11px] font-mono text-slate-400 text-right tabular-nums">
+                  {reviewComment.length} / 1500
+                </div>
+              </div>
+
+              {reviewStatus && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-medium border ${
+                    reviewStatus.type === 'success'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-700/60 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-700/60 text-rose-700 dark:text-rose-300'
+                  }`}
+                >
+                  {reviewStatus.text}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {myCourseReview && onDeleteCourseReview && (
+                  <button
+                    type="button"
+                    disabled={isSubmittingReview}
+                    onClick={() => {
+                      setIsSubmittingReview(true);
+                      void onDeleteCourseReview(course.id, myCourseReview.id)
+                        .then(() => {
+                          setReviewComment('');
+                          setReviewRating(5);
+                          setReviewStatus({
+                            type: 'success',
+                            text: 'Your course review was removed.',
+                          });
+                        })
+                        .catch((err) =>
+                          setReviewStatus({
+                            type: 'error',
+                            text:
+                              err instanceof Error
+                                ? err.message
+                                : 'Unable to delete review.',
+                          })
+                        )
+                        .finally(() => setIsSubmittingReview(false));
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 inline-flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Review</span>
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSubmittingReview}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-950 bg-gradient-to-r from-[#00F2FE] to-[#10B981] hover:brightness-110 transition-all inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>
+                    {isSubmittingReview
+                      ? 'Saving...'
+                      : myCourseReview
+                      ? 'Update Course Review'
+                      : 'Submit Course Review'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900/75 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+                Sign in with your student account to rate and review <strong className="text-slate-900 dark:text-white">{course.title}</strong>.
+              </div>
+              {onNavigateAuth && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateAuth('signin')}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-950 bg-[#00F2FE] hover:brightness-110 transition-all inline-flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign In to Review</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Published Student Reviews List */}
+          {currentCourseReviews.length > 0 ? (
+            <div className="space-y-3">
+              {currentCourseReviews.map((rev) => {
+                const canDelete =
+                  currentUser &&
+                  (currentUser.id === rev.authorId || currentUser.role === 'admin');
+                return (
+                  <div
+                    key={rev.id}
+                    className="p-5 rounded-2xl bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2.5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <SymbolicAvatar
+                          gender={rev.authorGender}
+                          name={rev.authorName}
+                          avatarUrl={rev.authorAvatar}
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {rev.authorName}
+                            </span>
+                            {rev.isVerifiedEnrollment && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Verified Enrolled
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-[11px] font-mono text-slate-400">
+                            <StarRatingDisplay rating={rev.rating} size="xs" showNumeric={false} />
+                            <span>
+                              · {new Date(rev.updatedAt || rev.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      {canDelete && onDeleteCourseReview && (
+                        <button
+                          type="button"
+                          onClick={() => void onDeleteCourseReview(course.id, rev.id)}
+                          title="Delete review"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
+                      {rev.comment}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-8 text-center rounded-2xl bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+              No course reviews submitted yet. Be the first learner to share your thoughts on {course.title}.
+            </div>
+          )}
         </div>
       )}
         </div>

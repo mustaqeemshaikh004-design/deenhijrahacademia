@@ -40,6 +40,8 @@ import type {
   PostComment,
   ChatMessage,
   CustomNavItem,
+  CourseReview,
+  InstructorReview,
 } from '../types';
 
 export const CHANCELLOR_EMAIL = 'mustaqeemshaikh004@gmail.com';
@@ -155,8 +157,16 @@ export function formatFirebaseAuthError(
       return 'Sign-in popup was blocked by your browser. Please allow popups for this site and retry.';
     case 'auth/cancelled-popup-request':
       return 'Another sign-in popup was already opened. Complete that window or retry.';
-    case 'auth/unauthorized-domain':
-      return 'This domain is not authorized for Firebase Google sign-in yet. Check your Firebase Auth authorized domains.';
+    case 'auth/unauthorized-domain': {
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      return host
+        ? `Domain "${host}" is not yet in Firebase Auth Authorized Domains for project ${firebaseConfig.projectId}.`
+        : 'This domain is not authorized for Firebase Google sign-in yet. Check your Firebase Auth authorized domains.';
+    }
+    case 'auth/operation-not-allowed':
+      return 'This sign-in provider is currently disabled in Firebase Authentication settings. Use Google Sign-In or enable Email/Password in Firebase Console.';
+    case 'auth/configuration-not-found':
+      return 'Firebase Authentication is not configured yet for this project. Please verify Firebase Auth setup.';
     case 'auth/network-request-failed':
       return 'Network connection error while contacting Google authentication. Check your internet and retry.';
     case 'auth/too-many-requests':
@@ -256,6 +266,9 @@ export function setStoredCachedUser(user: User | null | undefined): void {
         avatarStoragePath: user.avatarStoragePath,
         timezone: user.timezone,
         preferredTheme: user.preferredTheme,
+        readNotificationIds: Array.isArray(user.readNotificationIds)
+          ? user.readNotificationIds.slice(-100)
+          : undefined,
         hasCustomPassword: user.hasCustomPassword,
         createdAt: user.createdAt,
         lastActive: user.lastActive,
@@ -298,6 +311,8 @@ export function isFirebaseChancellorSignedIn(): boolean {
 
 // ==================== FIRESTORE USER & ROLE SYNC ====================
 
+const inFlightProfileSyncs = new Map<string, Promise<void>>();
+
 export async function syncUserProfileToFirestore(user: User): Promise<void> {
   const fbUser = auth.currentUser;
   if (!fbUser || !fbUser.emailVerified) return;
@@ -305,108 +320,126 @@ export async function syncUserProfileToFirestore(user: User): Promise<void> {
   const targetUid = fbUser.uid;
   assertValidBlueprintId(targetUid, 'userId');
 
-  const email = clampString(fbUser.email || user.email, BLUEPRINT_LIMITS.EMAIL_MAX_LEN);
-  const firstName = clampString(user.firstName, BLUEPRINT_LIMITS.FIRST_NAME_MAX_LEN, 'Scholar');
-  const lastName = clampString(user.lastName, BLUEPRINT_LIMITS.LAST_NAME_MAX_LEN, 'User');
-  const gender = user.gender === 'female' ? 'female' : 'male';
-  const isChancellor = email.toLowerCase() === CHANCELLOR_EMAIL;
+  const existingPromise = inFlightProfileSyncs.get(targetUid);
+  if (existingPromise) {
+    return existingPromise;
+  }
 
-  // Bootstrap admin doc if Chancellor Mustaqeem is authenticated
-  if (isChancellor) {
-    const adminPath = `admins/${targetUid}`;
+  const runSync = (async () => {
+    const email = clampString(fbUser.email || user.email, BLUEPRINT_LIMITS.EMAIL_MAX_LEN);
+    const firstName = clampString(user.firstName, BLUEPRINT_LIMITS.FIRST_NAME_MAX_LEN, 'Scholar');
+    const lastName = clampString(user.lastName, BLUEPRINT_LIMITS.LAST_NAME_MAX_LEN, 'User');
+    const gender = user.gender === 'female' ? 'female' : 'male';
+    const isChancellor = email.toLowerCase() === CHANCELLOR_EMAIL;
+
+    // Bootstrap admin doc if Chancellor Mustaqeem is authenticated
+    if (isChancellor) {
+      const adminPath = `admins/${targetUid}`;
+      try {
+        const adminRef = doc(db, 'admins', targetUid);
+        const adminSnap = await getDoc(adminRef);
+        if (!adminSnap.exists()) {
+          await setDoc(adminRef, {
+            uid: targetUid,
+            email: email.toLowerCase(),
+            role: 'admin',
+            grantedAt: serverTimestamp(),
+          });
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, adminPath);
+      }
+    }
+
+    const rootPath = `users/${targetUid}`;
     try {
-      const adminRef = doc(db, 'admins', targetUid);
-      const adminSnap = await getDoc(adminRef);
-      if (!adminSnap.exists()) {
-        await setDoc(adminRef, {
-          uid: targetUid,
-          email,
-          role: 'admin',
-          grantedAt: serverTimestamp(),
+      const userRef = doc(db, 'users', targetUid);
+      const snap = await getDoc(userRef);
+      const ts = serverTimestamp();
+      if (!snap.exists()) {
+        await setDoc(userRef, {
+          id: targetUid,
+          role: isChancellor ? 'admin' : 'student',
+          createdAt: ts,
+          updatedAt: ts,
+        });
+      } else if (isChancellor && snap.data()?.role !== 'admin') {
+        await updateDoc(userRef, { role: 'admin', updatedAt: ts });
+      } else {
+        await updateDoc(userRef, { updatedAt: ts });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, rootPath);
+    }
+
+    const publicPath = `users/${targetUid}/public/profile`;
+    try {
+      const publicRef = doc(db, 'users', targetUid, 'public', 'profile');
+      const pubSnap = await getDoc(publicRef);
+      const ts = serverTimestamp();
+      const avatarUrl = clampString(user.avatarUrl, BLUEPRINT_LIMITS.URL_MAX_LEN);
+      const avatarStoragePath = clampString(
+        user.avatarStoragePath,
+        BLUEPRINT_LIMITS.STORAGE_PATH_MAX_LEN
+      );
+      const validStoragePath =
+        avatarStoragePath && avatarStoragePath.startsWith(`avatars/${targetUid}/`)
+          ? avatarStoragePath
+          : '';
+
+      if (!pubSnap.exists()) {
+        await setDoc(publicRef, {
+          id: targetUid,
+          firstName,
+          lastName,
+          gender,
+          avatarUrl,
+          avatarStoragePath: validStoragePath,
+          visibility: 'public',
+          createdAt: ts,
+          updatedAt: ts,
+        });
+      } else {
+        await updateDoc(publicRef, {
+          firstName,
+          lastName,
+          gender,
+          ...(avatarUrl ? { avatarUrl } : {}),
+          ...(validStoragePath ? { avatarStoragePath: validStoragePath } : {}),
+          updatedAt: ts,
         });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, adminPath);
+      handleFirestoreError(error, OperationType.WRITE, publicPath);
     }
-  }
 
-  const rootPath = `users/${targetUid}`;
+    const privatePath = `users/${targetUid}/private/info`;
+    try {
+      const privateRef = doc(db, 'users', targetUid, 'private', 'info');
+      const privSnap = await getDoc(privateRef);
+      const ts = serverTimestamp();
+      if (!privSnap.exists()) {
+        await setDoc(privateRef, {
+          id: targetUid,
+          email,
+          createdAt: ts,
+          updatedAt: ts,
+        });
+      } else {
+        await updateDoc(privateRef, { updatedAt: ts });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, privatePath);
+    }
+  })();
+
+  inFlightProfileSyncs.set(targetUid, runSync);
   try {
-    const userRef = doc(db, 'users', targetUid);
-    const snap = await getDoc(userRef);
-    const ts = serverTimestamp();
-    if (!snap.exists()) {
-      await setDoc(userRef, {
-        id: targetUid,
-        role: isChancellor ? 'admin' : 'student',
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    } else {
-      await updateDoc(userRef, { updatedAt: ts });
+    await runSync;
+  } finally {
+    if (inFlightProfileSyncs.get(targetUid) === runSync) {
+      inFlightProfileSyncs.delete(targetUid);
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, rootPath);
-  }
-
-  const publicPath = `users/${targetUid}/public/profile`;
-  try {
-    const publicRef = doc(db, 'users', targetUid, 'public', 'profile');
-    const pubSnap = await getDoc(publicRef);
-    const ts = serverTimestamp();
-    const avatarUrl = clampString(user.avatarUrl, BLUEPRINT_LIMITS.URL_MAX_LEN);
-    const avatarStoragePath = clampString(
-      user.avatarStoragePath,
-      BLUEPRINT_LIMITS.STORAGE_PATH_MAX_LEN
-    );
-    const validStoragePath =
-      avatarStoragePath && avatarStoragePath.startsWith(`avatars/${targetUid}/`)
-        ? avatarStoragePath
-        : '';
-
-    if (!pubSnap.exists()) {
-      await setDoc(publicRef, {
-        id: targetUid,
-        firstName,
-        lastName,
-        gender,
-        avatarUrl,
-        avatarStoragePath: validStoragePath,
-        visibility: 'public',
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    } else {
-      await updateDoc(publicRef, {
-        firstName,
-        lastName,
-        gender,
-        ...(avatarUrl ? { avatarUrl } : {}),
-        ...(validStoragePath ? { avatarStoragePath: validStoragePath } : {}),
-        updatedAt: ts,
-      });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, publicPath);
-  }
-
-  const privatePath = `users/${targetUid}/private/info`;
-  try {
-    const privateRef = doc(db, 'users', targetUid, 'private', 'info');
-    const privSnap = await getDoc(privateRef);
-    const ts = serverTimestamp();
-    if (!privSnap.exists()) {
-      await setDoc(privateRef, {
-        id: targetUid,
-        email,
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    } else {
-      await updateDoc(privateRef, { updatedAt: ts });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, privatePath);
   }
 }
 
@@ -499,6 +532,98 @@ export async function saveUserThemePreferenceToServer(
     if (!res.ok) return null;
     const updated = (await res.json()) as User;
     return updated;
+  } catch {
+    return null;
+  }
+}
+
+export function sanitizeReadNotificationIds(rawIds: string[]): string[] {
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  for (const raw of rawIds) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim().slice(0, 256);
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    clean.push(trimmed);
+  }
+  return clean.slice(-100);
+}
+
+export async function saveReadNotificationsToFirestore(
+  readIds: string[],
+  fallbackTheme: 'dark' | 'light' = 'dark'
+): Promise<void> {
+  const fbUser = auth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+
+  const targetUid = assertValidBlueprintId(fbUser.uid, 'userId');
+  const safeIds = sanitizeReadNotificationIds(readIds);
+  const safeTheme: 'dark' | 'light' = fallbackTheme === 'light' ? 'light' : 'dark';
+  const isChancellor = (fbUser.email || '').trim().toLowerCase() === CHANCELLOR_EMAIL;
+
+  // Master Gate: guarantee root /users/{userId} document exists before writing subcollection
+  const rootPath = `users/${targetUid}`;
+  try {
+    const userRef = doc(db, 'users', targetUid);
+    const rootSnap = await getDoc(userRef);
+    if (!rootSnap.exists()) {
+      const ts = serverTimestamp();
+      await setDoc(userRef, {
+        id: targetUid,
+        role: isChancellor ? 'admin' : 'student',
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, rootPath);
+  }
+
+  const prefPath = `users/${targetUid}/preferences/ui`;
+  try {
+    const prefRef = doc(db, 'users', targetUid, 'preferences', 'ui');
+    const prefSnap = await getDoc(prefRef);
+    const ts = serverTimestamp();
+    if (!prefSnap.exists()) {
+      await setDoc(prefRef, {
+        id: 'ui',
+        userId: targetUid,
+        theme: safeTheme,
+        readNotificationIds: safeIds,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    } else {
+      await updateDoc(prefRef, {
+        readNotificationIds: safeIds,
+        updatedAt: ts,
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, prefPath);
+  }
+}
+
+export async function saveReadNotificationsToServer(
+  userId: string,
+  readIds: string[],
+  email?: string
+): Promise<User | null> {
+  try {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
+    const safeIds = sanitizeReadNotificationIds(readIds);
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/notifications/read`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({
+        readNotificationIds: safeIds,
+        ...(email ? { email } : {}),
+      }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as User;
   } catch {
     return null;
   }
@@ -1414,6 +1539,143 @@ export async function createChatMessageInFirestore(msg: ChatMessage): Promise<vo
   }
 }
 
+export async function saveCourseReviewToFirestore(review: CourseReview): Promise<void> {
+  const fbUser = auth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+
+  const safeCourseId = assertValidBlueprintId(review.courseId, 'courseId');
+  const safeUid = assertValidBlueprintId(fbUser.uid, 'authorId');
+  const safeId = assertValidBlueprintId(`${safeCourseId}_${safeUid}`, 'reviewId');
+  const reviewPath = `courseReviews/${safeId}`;
+
+  try {
+    const ref = doc(db, 'courseReviews', safeId);
+    const snap = await getDoc(ref);
+    const authorAvatar = clampString(review.authorAvatar, BLUEPRINT_LIMITS.URL_MAX_LEN);
+    const rating = Math.min(5, Math.max(1, Math.round(Number(review.rating) || 5)));
+    const comment = clampString(review.comment, 1500, 'Course review');
+
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        rating,
+        comment,
+        authorName: clampString(review.authorName, 120, fbUser.displayName || 'Student'),
+        ...(authorAvatar ? { authorAvatar } : {}),
+        isVerifiedEnrollment: Boolean(review.isVerifiedEnrollment),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        id: safeId,
+        courseId: safeCourseId,
+        authorId: safeUid,
+        authorName: clampString(review.authorName, 120, fbUser.displayName || 'Student'),
+        authorGender: review.authorGender === 'female' ? 'female' : 'male',
+        ...(authorAvatar ? { authorAvatar } : {}),
+        rating,
+        comment,
+        isVerifiedEnrollment: Boolean(review.isVerifiedEnrollment),
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, reviewPath);
+  }
+}
+
+export async function deleteCourseReviewFromFirestore(
+  courseId: string,
+  reviewId?: string
+): Promise<void> {
+  const fbUser = auth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+
+  const candidateId =
+    reviewId && BLUEPRINT_LIMITS.ID_PATTERN.test(reviewId)
+      ? reviewId
+      : `${assertValidBlueprintId(courseId, 'courseId')}_${assertValidBlueprintId(fbUser.uid, 'userId')}`;
+  const reviewPath = `courseReviews/${candidateId}`;
+  try {
+    await deleteDoc(doc(db, 'courseReviews', candidateId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, reviewPath);
+  }
+}
+
+export async function saveInstructorReviewToFirestore(review: InstructorReview): Promise<void> {
+  const fbUser = auth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+
+  const safeInstructorId = assertValidBlueprintId(review.instructorId, 'instructorId');
+  const safeUid = assertValidBlueprintId(fbUser.uid, 'authorId');
+  const safeId = assertValidBlueprintId(`${safeInstructorId}_${safeUid}`, 'reviewId');
+  const reviewPath = `instructorReviews/${safeId}`;
+
+  try {
+    const ref = doc(db, 'instructorReviews', safeId);
+    const snap = await getDoc(ref);
+    const authorAvatar = clampString(review.authorAvatar, BLUEPRINT_LIMITS.URL_MAX_LEN);
+    const courseId = review.courseId ? clampString(review.courseId, 128) : '';
+    const courseTitle = review.courseTitle ? clampString(review.courseTitle, 200) : '';
+    const rating = Math.min(5, Math.max(1, Math.round(Number(review.rating) || 5)));
+    const comment = clampString(review.comment, 1500, 'Instructor review');
+
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        rating,
+        comment,
+        authorName: clampString(review.authorName, 120, fbUser.displayName || 'Student'),
+        ...(authorAvatar ? { authorAvatar } : {}),
+        ...(courseId ? { courseId } : {}),
+        ...(courseTitle ? { courseTitle } : {}),
+        isVerifiedStudent: Boolean(review.isVerifiedStudent),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        id: safeId,
+        instructorId: safeInstructorId,
+        instructorName: clampString(review.instructorName, 120, 'Academy Instructor'),
+        authorId: safeUid,
+        authorName: clampString(review.authorName, 120, fbUser.displayName || 'Student'),
+        authorGender: review.authorGender === 'female' ? 'female' : 'male',
+        ...(authorAvatar ? { authorAvatar } : {}),
+        ...(courseId ? { courseId } : {}),
+        ...(courseTitle ? { courseTitle } : {}),
+        rating,
+        comment,
+        isVerifiedStudent: Boolean(review.isVerifiedStudent),
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, reviewPath);
+  }
+}
+
+export async function deleteInstructorReviewFromFirestore(
+  instructorId: string,
+  reviewId?: string
+): Promise<void> {
+  const fbUser = auth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+
+  const candidateId =
+    reviewId && BLUEPRINT_LIMITS.ID_PATTERN.test(reviewId)
+      ? reviewId
+      : `${assertValidBlueprintId(instructorId, 'instructorId')}_${assertValidBlueprintId(fbUser.uid, 'userId')}`;
+  const reviewPath = `instructorReviews/${candidateId}`;
+  try {
+    await deleteDoc(doc(db, 'instructorReviews', candidateId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, reviewPath);
+  }
+}
+
 // ==================== REAL-TIME FIRESTORE ONSNAPSHOT SUBSCRIPTIONS ====================
 
 function wrapSnapshotError(
@@ -1635,6 +1897,75 @@ export function subscribeToChatMessages(
   );
 }
 
+export function subscribeToCourseReviews(
+  onData: (reviews: CourseReview[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const path = 'courseReviews';
+  const q = query(collection(db, 'courseReviews'), where('isPublished', '==', true));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const reviews: CourseReview[] = snapshot.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: String(data.id || d.id),
+          courseId: String(data.courseId || ''),
+          authorId: String(data.authorId || ''),
+          authorName: String(data.authorName || 'Academy Student'),
+          authorGender: data.authorGender === 'female' ? 'female' : 'male',
+          authorAvatar: typeof data.authorAvatar === 'string' && data.authorAvatar ? data.authorAvatar : undefined,
+          rating: Math.min(5, Math.max(1, Number(data.rating) || 5)),
+          comment: String(data.comment || ''),
+          isVerifiedEnrollment: Boolean(data.isVerifiedEnrollment),
+          isPublished: data.isPublished !== false,
+          createdAt: toIsoString(data.createdAt),
+          updatedAt: toIsoString(data.updatedAt),
+        };
+      });
+      reviews.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      onData(reviews);
+    },
+    wrapSnapshotError(OperationType.GET, path, onError)
+  );
+}
+
+export function subscribeToInstructorReviews(
+  onData: (reviews: InstructorReview[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const path = 'instructorReviews';
+  const q = query(collection(db, 'instructorReviews'), where('isPublished', '==', true));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const reviews: InstructorReview[] = snapshot.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: String(data.id || d.id),
+          instructorId: String(data.instructorId || ''),
+          instructorName: String(data.instructorName || 'Academy Instructor'),
+          authorId: String(data.authorId || ''),
+          authorName: String(data.authorName || 'Academy Student'),
+          authorGender: data.authorGender === 'female' ? 'female' : 'male',
+          authorAvatar: typeof data.authorAvatar === 'string' && data.authorAvatar ? data.authorAvatar : undefined,
+          courseId: typeof data.courseId === 'string' && data.courseId ? data.courseId : undefined,
+          courseTitle: typeof data.courseTitle === 'string' && data.courseTitle ? data.courseTitle : undefined,
+          rating: Math.min(5, Math.max(1, Number(data.rating) || 5)),
+          comment: String(data.comment || ''),
+          isVerifiedStudent: Boolean(data.isVerifiedStudent),
+          isPublished: data.isPublished !== false,
+          createdAt: toIsoString(data.createdAt),
+          updatedAt: toIsoString(data.updatedAt),
+        };
+      });
+      reviews.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      onData(reviews);
+    },
+    wrapSnapshotError(OperationType.GET, path, onError)
+  );
+}
+
 export function subscribeToUserAccount(
   uid: string,
   onPatch: (patch: Partial<User>) => void,
@@ -1683,7 +2014,8 @@ export function subscribeToUserAccount(
 export function subscribeToUserPreferences(
   uid: string,
   onTheme: (theme: 'dark' | 'light') => void,
-  onError?: (err: Error) => void
+  onError?: (err: Error) => void,
+  onReadNotifications?: (readIds: string[]) => void
 ): Unsubscribe {
   const safeUid = assertValidBlueprintId(uid, 'userId');
   const prefPath = `users/${safeUid}/preferences/ui`;
@@ -1692,13 +2024,75 @@ export function subscribeToUserPreferences(
     doc(db, 'users', safeUid, 'preferences', 'ui'),
     (snap) => {
       if (!snap.exists()) return;
-      const rawTheme = snap.data()?.theme;
+      const data = snap.data();
+      const rawTheme = data?.theme;
       if (rawTheme === 'dark' || rawTheme === 'light') {
         onTheme(rawTheme);
+      }
+      if (onReadNotifications && Array.isArray(data?.readNotificationIds)) {
+        onReadNotifications(sanitizeReadNotificationIds(data.readNotificationIds));
       }
     },
     wrapSnapshotError(OperationType.GET, prefPath, onError)
   );
+}
+
+export function subscribeToEnrolledCourseRecordings(
+  courseIds: string[],
+  onCourseRecordings: (courseId: string, recordings: CompletedVideoArchive[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const unsubs: Unsubscribe[] = [];
+  const validCourseIds = Array.from(
+    new Set(
+      courseIds.filter(
+        (cid) =>
+          typeof cid === 'string' &&
+          cid.length > 0 &&
+          cid.length <= BLUEPRINT_LIMITS.ID_MAX_LEN &&
+          BLUEPRINT_LIMITS.ID_PATTERN.test(cid)
+      )
+    )
+  ).slice(0, 20);
+
+  for (const cid of validCourseIds) {
+    const catalogPath = `courses/${cid}/recordingCatalog`;
+    const q = query(
+      collection(db, 'courses', cid, 'recordingCatalog'),
+      where('courseId', '==', cid),
+      where('mimeType', '==', 'video/mp4')
+    );
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const items: CompletedVideoArchive[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: String(data.id || d.id),
+            title: String(data.title || 'Lecture Recording'),
+            duration: String(data.duration || '45 min'),
+            recordedAt:
+              typeof data.recordedAt === 'string' && data.recordedAt
+                ? data.recordedAt
+                : toIsoString(data.createdAt),
+            videoUrl: '',
+            thumbnailUrl: typeof data.thumbnailUrl === 'string' ? data.thumbnailUrl : '',
+            isOrientation: Boolean(data.isOrientation),
+            mimeType: 'video/mp4',
+            syncedFromZoomWebhook: false,
+            fileSize: String(data.fileSize || '150 MB'),
+          };
+        });
+        onCourseRecordings(cid, items);
+      },
+      wrapSnapshotError(OperationType.GET, catalogPath, onError)
+    );
+    unsubs.push(unsub);
+  }
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
 }
 
 // ==================== DUAL-PATH SMART MEDIA UPLOADS (SQL SERVER + FIREBASE STORAGE) ====================

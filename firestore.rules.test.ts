@@ -421,6 +421,7 @@ describe('Deen Hijrah Academia Firestore Security Rules — Dirty Dozen & Master
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'users', 'student-alice', 'preferences', 'ui'), {
         theme: 'dark',
+        readNotificationIds: ['evt:evt-1', 'rec:course-seerah-101:rec-private-1'],
         updatedAt: serverTimestamp(),
       })
     );
@@ -434,10 +435,16 @@ describe('Deen Hijrah Academia Firestore Security Rules — Dirty Dozen & Master
       })
     );
 
-    // Invalid theme enum or shadow field rejected
+    // Invalid theme enum, invalid readNotificationIds, or shadow field rejected
     await assertFails(
       updateDoc(doc(aliceDb, 'users', 'student-alice', 'preferences', 'ui'), {
         theme: 'neon',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      updateDoc(doc(aliceDb, 'users', 'student-alice', 'preferences', 'ui'), {
+        readNotificationIds: Array.from({ length: 101 }, (_, idx) => `id-${idx}`),
         updatedAt: serverTimestamp(),
       })
     );
@@ -449,4 +456,103 @@ describe('Deen Hijrah Academia Firestore Security Rules — Dirty Dozen & Master
       } as Record<string, unknown>)
     );
   });
+
+  test('CourseReviews & InstructorReviews: Authors can publish/edit their own bounded 1-5 reviews; blocks spoofing, out-of-range ratings, and cross-user edits', async () => {
+    const aliceDb = testEnv.authenticatedContext('student-alice', { email_verified: true }).firestore();
+    const bobDb = testEnv.authenticatedContext('student-bob', { email_verified: true }).firestore();
+
+    const validCourseReviewId = 'course-seerah-101_student-alice';
+    await assertSucceeds(
+      setDoc(doc(aliceDb, 'courseReviews', validCourseReviewId), {
+        id: validCourseReviewId,
+        courseId: 'course-seerah-101',
+        authorId: 'student-alice',
+        authorName: 'Alice Khan',
+        authorGender: 'female',
+        rating: 5,
+        comment: 'Deeply structured Seerah methodology and clear timeline breakdowns.',
+        isVerifiedEnrollment: true,
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    const validInstructorReviewId = 'teacher-umar_student-alice';
+    await assertSucceeds(
+      setDoc(doc(aliceDb, 'instructorReviews', validInstructorReviewId), {
+        id: validInstructorReviewId,
+        instructorId: 'teacher-umar',
+        instructorName: 'Shaykh Umar Al-Madani',
+        authorId: 'student-alice',
+        authorName: 'Alice Khan',
+        authorGender: 'female',
+        courseId: 'course-seerah-101',
+        courseTitle: 'Prophetic Biography (Seerah)',
+        rating: 5,
+        comment: 'Patient pedagogy with primary source references in every class.',
+        isVerifiedStudent: true,
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // Public list of published reviews succeeds
+    const reviewsQuery = query(collection(bobDb, 'courseReviews'), where('isPublished', '==', true));
+    assert.ok(await assertSucceeds(getDocs(reviewsQuery)));
+
+    // Author can update their own review rating & comment
+    await assertSucceeds(
+      updateDoc(doc(aliceDb, 'courseReviews', validCourseReviewId), {
+        rating: 4,
+        comment: 'Updated thoughtful review after completing Module 3.',
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // Cross-user tamper rejected
+    await assertFails(
+      updateDoc(doc(bobDb, 'courseReviews', validCourseReviewId), {
+        rating: 1,
+        comment: 'Sabotaged comment',
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // Out-of-range rating & author spoofing rejected
+    await assertFails(
+      setDoc(doc(bobDb, 'courseReviews', 'course-seerah-101_student-bob'), {
+        id: 'course-seerah-101_student-bob',
+        courseId: 'course-seerah-101',
+        authorId: 'student-bob',
+        authorName: 'Bob',
+        authorGender: 'male',
+        rating: 6,
+        comment: 'Invalid star score',
+        isVerifiedEnrollment: false,
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    await assertFails(
+      setDoc(doc(bobDb, 'instructorReviews', 'teacher-umar_student-alice'), {
+        id: 'teacher-umar_student-alice',
+        instructorId: 'teacher-umar',
+        instructorName: 'Shaykh Umar Al-Madani',
+        authorId: 'student-alice',
+        authorName: 'Spoofed Alice',
+        authorGender: 'female',
+        rating: 1,
+        comment: 'Impersonated review',
+        isVerifiedStudent: false,
+        isPublished: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+  });
 });
+

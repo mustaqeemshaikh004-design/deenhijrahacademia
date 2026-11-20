@@ -227,6 +227,10 @@ All 12 payloads below MUST evaluate to `PERMISSION_DENIED`:
         "updatedAt": "2020-01-01T00:00:00Z"
       }
       ```
-13. **Cross-User Preference Tampering & Enum Poisoning (`/users/{userId}/preferences/ui`):**
-    - Actor: `student-alice` (`email_verified: true`) attempting to read/overwrite `student-bob`'s `/users/student-bob/preferences/ui`, OR writing `{ "theme": "neon", "isAdmin": true }` to her own `/users/student-alice/preferences/ui`.
-    - Pass Criteria: Cross-user preference reads/writes, list queries, invalid `theme` enum values, and shadow fields are all rejected with `PERMISSION_DENIED`.
+13. **Cross-User Preference Tampering, Enum Poisoning & Unbounded Notification Array (`/users/{userId}/preferences/ui`):**
+    - Actor: `student-alice` (`email_verified: true`) attempting to read/overwrite `student-bob`'s `/users/student-bob/preferences/ui`, OR writing `{ "theme": "neon", "isAdmin": true }` or an oversized/non-string `readNotificationIds` array (> 100 entries) to her own `/users/student-alice/preferences/ui`.
+    - Pass Criteria: Cross-user preference reads/writes, list queries, invalid `theme` enum values, unbounded or non-string `readNotificationIds` arrays, and shadow fields are all rejected with `PERMISSION_DENIED`.
+14. **Course & Instructor Review Integrity, Author Spoofing & Rating Bounds (`/courseReviews/{reviewId}`, `/instructorReviews/{reviewId}`):**
+    - Actor: `student-alice` (`email_verified: true`) attempting to submit `rating: 6` (or `0`), forge `authorId: "student-bob"`, use a non-deterministic duplicate ID bypassing `<targetId>_<uid>`, overwrite/delete `student-bob`'s existing review, or inject shadow fields.
+    - Pass Criteria: Published reviews (`isPublished == true`) are publicly readable (`get`/`list`), while creates/updates/deletes strictly bind `authorId == request.auth.uid`, deterministic single-review-per-user IDs, integer/bounded ratings `1..5`, bounded comment length `1..1500`, and `request.time` timestamps.
+
